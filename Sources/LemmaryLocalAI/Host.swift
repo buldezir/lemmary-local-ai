@@ -4,9 +4,15 @@ import Foundation
 enum Paths {
     static let appSupport = URL.applicationSupportDirectory.appending(path: "LemmaryLocalAI", directoryHint: .isDirectory)
     static let models = appSupport.appending(path: "models", directoryHint: .isDirectory)
-    static let llamaPIDFile = appSupport.appending(path: "llama-server.pid")
+    /// One per port, because that is what a leftover server is in the way of,
+    /// and so a development copy on other ports leaves the installed app's
+    /// servers alone.
+    static func llamaPIDFile(port: Int) -> URL {
+        appSupport.appending(path: "llama-server-\(port).pid")
+    }
     static let logs = URL.libraryDirectory.appending(path: "Logs/LemmaryLocalAI", directoryHint: .isDirectory)
     static let llamaLog = logs.appending(path: "llama-server.log")
+    static let textModelLog = logs.appending(path: "text-model.log")
     static let ocrLog = logs.appending(path: "ocr.log")
     static let uploads = FileManager.default.temporaryDirectory.appending(path: "LemmaryLocalAI-uploads", directoryHint: .isDirectory)
 

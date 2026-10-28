@@ -2,9 +2,9 @@ import Foundation
 import LocalAIKit
 import Observation
 
-/// Where the embeddings model lives, and getting it there: either the app's own
-/// verified download or a GGUF the user already has (the LaunchAgent setup kept
-/// one in `~/ai/models`).
+/// Where one model lives, and getting it there: either the app's own verified
+/// download or a GGUF the user already has (the LaunchAgent setup kept bge-m3
+/// in `~/ai/models`).
 @MainActor
 @Observable
 final class ModelStore {
@@ -15,18 +15,31 @@ final class ModelStore {
         case failed(String)
     }
 
-    let descriptor = ModelDescriptor.bgeM3
+    let descriptor: ModelDescriptor
     private(set) var download: Download = .idle
-    /// Called once a model is in place, so the embeddings service can start.
+    /// Called once a model is in place, so its service can start.
     var onInstalled: (() -> Void)?
 
+    /// A file chosen with "Use Existing File…"; empty means the app's own
+    /// download. Kept in the setting `pathKey`.
+    private(set) var customPath: String {
+        didSet { UserDefaults.standard.set(customPath, forKey: pathKey) }
+    }
+
+    private let pathKey: String
     private var task: URLSessionDownloadTask?
     private var session: URLSession?
+
+    init(descriptor: ModelDescriptor, pathKey: String) {
+        self.descriptor = descriptor
+        self.pathKey = pathKey
+        customPath = UserDefaults.standard.string(forKey: pathKey) ?? ""
+    }
 
     var defaultLocation: URL { Paths.models.appending(path: descriptor.fileName) }
 
     var configuredLocation: URL {
-        Preferences.modelPath.isEmpty ? defaultLocation : URL(fileURLWithPath: Preferences.modelPath)
+        customPath.isEmpty ? defaultLocation : URL(fileURLWithPath: customPath)
     }
 
     var installedModel: URL? {
@@ -34,13 +47,13 @@ final class ModelStore {
     }
 
     func useExisting(_ url: URL) {
-        Preferences.modelPath = url.path
+        customPath = url.path
         download = .idle
         onInstalled?()
     }
 
     func useDefaultLocation() {
-        Preferences.modelPath = ""
+        customPath = ""
         onInstalled?()
     }
 

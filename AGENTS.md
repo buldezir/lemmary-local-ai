@@ -4,7 +4,9 @@ A macOS menu bar app that serves Lemmary's two local AI endpoints from an Apple
 Silicon Mac: bge-m3 embeddings through a bundled `llama-server`, and OCR through
 Apple Vision behind a docling-serve-compatible API. It replaces the LaunchAgent
 setup in Lemmary's `docs/local_ai_macos.md` and must stay a drop-in for it:
-same ports, same model name, same response shapes.
+same ports, same model name, same response shapes. A third service, off by
+default, serves a small text model through a second `llama-server` for
+Lemmary's metadata extraction, reached with Lemmary's OpenAI provider type.
 
 ## Layout
 
@@ -13,14 +15,15 @@ same ports, same model name, same response shapes.
   Network.framework, the request parser, multipart), `Docling/` (the
   docling-compatible endpoint and media types), `Layout/` (Vision's page layout
   reduced to plain structs, and the markdown renderer), `Worker/` (the worker
-  protocol, `PersistentWorker`, `WorkerPool`), `Embeddings/` (the llama-server
-  command line, the model's URL and hash, restart backoff), `LogFile`.
+  protocol, `PersistentWorker`, `WorkerPool`), `Llama/` (both llama-server
+  command lines, the models' URLs and hashes, restart backoff), `LogFile`.
 - `Sources/VisionOCR/`: Vision and page rendering. Only the worker links it.
 - `Sources/OCRWorker/`: `ocr-worker serve`, the long-lived worker the app
   pools, and `ocr-worker convert <file> <kind>` for trying a file by hand.
-- `Sources/LemmaryLocalAI/`: the SwiftUI app. `EmbeddingsService` supervises
-  llama-server, `OCRService` runs the HTTP server and the worker pool,
-  `ModelStore` downloads the model, `UI/` the popover and Settings.
+- `Sources/LemmaryLocalAI/`: the SwiftUI app. `LlamaService` supervises one
+  llama-server (there are two: embeddings and the text model), `OCRService`
+  runs the HTTP server and the worker pool, `ModelStore` downloads one model,
+  `UI/` the popover and Settings.
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
   drive it. `Scripts/appicon.swift` draws `Resources/LemmaryLocalAI.icns`
@@ -37,6 +40,7 @@ Lemmary ──POST /v1/convert/file──> HTTPServer (in the app)
                                      request line on stdin ──────>│ Vision, one page at a time
                                      progress/result lines <──────│
 Lemmary ──POST /v1/embeddings────> llama-server (child process, restarted with backoff)
+Lemmary ──POST /v1/chat/completions> llama-server with the text model (optional, same supervision)
 ```
 
 ## Constraints agents should not re-break
@@ -73,7 +77,7 @@ Lemmary ──POST /v1/embeddings────> llama-server (child process, rest
   `Content-Length`; chunked uploads get 411. Lemmary's Go client, curl -F and
   Python requests all send a length. `Expect: 100-continue` is answered, or
   curl waits a second before every upload.
-- **The embeddings flags are measured ones** (`LlamaServerConfig`). `-ub` must be
+- **The embeddings flags are measured ones** (`EmbeddingsServerConfig`). `-ub` must be
   at least ~6144 or Lemmary's longest inputs fail; `--pooling cls` and the
   `BAAI/bge-m3` alias are what make the vectors and the model name match TEI and
   Lemmary. See Lemmary's guide for the numbers.
@@ -83,13 +87,30 @@ Lemmary ──POST /v1/embeddings────> llama-server (child process, rest
   that, because a different build's vectors would mean re-embedding Lemmary's
   archive.
 - **A llama-server left by a crashed app is reaped** on the next start through
-  `llama-server.pid` in Application Support, and only if its path is inside a
-  `LemmaryLocalAI` bundle. Otherwise it holds the port and the new one
-  restart-loops.
+  `llama-server-<port>.pid` in Application Support, and only if its path is
+  inside a `LemmaryLocalAI` bundle. Otherwise it holds the port and the new one
+  restart-loops. Per port, so a development copy on other ports never reaps
+  the installed app's servers.
+- **The text model runs with thinking off and no prompt cache in RAM**
+  (`TextServerConfig`). Both models think unless the request says otherwise,
+  and Lemmary's does not: Gemma 4 E4B went from about 10 s to 30 to 60 s a
+  document for the same JSON. llama-server keeps earlier prompts in RAM up to
+  8 GB by default, and its memory grew about 180 MB a document; with
+  `--cache-ram 0` it stayed flat and the slot still reused the system prompt.
+- **The text model is its own llama-server.** One process holds one model, and
+  `--embeddings` turns the chat endpoints off. llama-server's router mode
+  (`--models-preset`) puts both behind one port but starts a child server per
+  model anyway, plus itself.
+- **Text model downloads are pinned to a repository commit** (`TextModel`), so
+  a re-upload on Hugging Face cannot turn every download into a checksum
+  failure. Changing a model means re-running Lemmary's extraction on German and
+  Russian documents; the README has what the current two did.
 - **Writes to a worker's stdin use `F_SETNOSIGPIPE`.** A worker can die between
   the check and the write; without it the app would die of SIGPIPE.
 - **One copy at a time.** A second instance hands over to the first and quits;
-  two would fight for both ports.
+  two would fight for the ports. A build running from `.build` is exempt, for
+  testing beside the installed app on other ports; it shares the installed
+  app's settings, so give it settings on the command line only.
 - **The ad-hoc signature in `bundle.sh` is not decoration.** Nested code is
   signed inside out (dylibs, helpers, then the app). `SIGN_IDENTITY` switches to
   a Developer ID with the hardened runtime, which notarization needs.
@@ -98,11 +119,16 @@ Lemmary ──POST /v1/embeddings────> llama-server (child process, rest
 
 ```bash
 swift test                              # LocalAIKit with real processes and sockets; VisionOCR with Vision
-Scripts/dev.sh --run -EmbeddingsPort 18080 -OCRPort 15001 -ModelPath ~/ai/models/bge-m3-f16.gguf
+Scripts/dev.sh --run -EmbeddingsPort 18080 -OCRPort 15001 -TextModelPort 18081 \
+  -ModelPath ~/ai/models/bge-m3-f16.gguf -TextModelEnabled YES
 curl -s localhost:15001/ready           # 503 while workers warm up, then 200
 curl -s -F to_formats=md -F 'files=@some.pdf;type=application/pdf' localhost:15001/v1/convert/file
 curl -s localhost:18080/v1/embeddings -H 'Content-Type: application/json' -d '{"model":"BAAI/bge-m3","input":["test"]}'
+curl -s localhost:18081/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"Say hi"}]}'
 ```
+
+`-TextModelPath-gemma-4-e4b <file>` points the text model at a GGUF already on
+disk instead of the download.
 
 The first conversion after a worker starts can take about 12 seconds once
 while Vision loads a model the warm-up page did not touch; the default page

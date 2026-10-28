@@ -28,10 +28,10 @@ struct PopoverView: View {
                 engine: "bge-m3 on llama.cpp",
                 status: app.embeddings.status,
                 url: app.embeddingsURL,
-                detail: app.embeddings.memory.map { "\($0.formatted(.byteCount(style: .memory))) in memory" }
+                detail: memoryDetail(app.embeddings)
             )
             if case .needsSetup = app.embeddings.status {
-                ModelSetupView(store: app.modelStore)
+                ModelSetupView(store: app.modelStore, needs: "Embeddings need")
             }
 
             ServiceRow(
@@ -41,6 +41,19 @@ struct PopoverView: View {
                 url: app.ocrURL,
                 detail: ocrDetail
             )
+
+            if app.textEnabled {
+                ServiceRow(
+                    title: "Text model",
+                    engine: "\(app.textModel.descriptor.title) on llama.cpp",
+                    status: app.text.status,
+                    url: app.textURL,
+                    detail: textDetail
+                )
+                if case .needsSetup = app.text.status {
+                    ModelSetupView(store: app.textModelStore, needs: "The text model needs")
+                }
+            }
 
             Divider()
 
@@ -55,6 +68,15 @@ struct PopoverView: View {
         .padding(Metrics.gutter)
         .frame(width: Metrics.popoverWidth)
         .onAppear { app.refreshAddress() }
+    }
+
+    private func memoryDetail(_ service: LlamaService) -> String? {
+        service.memory.map { "\($0.formatted(.byteCount(style: .memory))) in memory" }
+    }
+
+    /// Lemmary's OpenAI provider type asks for a model name as well as the URL.
+    private var textDetail: String {
+        ["Model name \(app.textModel.descriptor.name)", memoryDetail(app.text)].compactMap(\.self).joined(separator: " · ")
     }
 
     private var ocrDetail: String? {
@@ -122,12 +144,14 @@ struct ServiceRow: View {
 
 struct ModelSetupView: View {
     let store: ModelStore
+    /// The start of the sentence that names the model, e.g. "Embeddings need".
+    let needs: String
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.tight) {
             switch store.download {
             case .idle, .failed:
-                Text("Embeddings need \(store.descriptor.name) (\(store.descriptor.size.formatted(.byteCount(style: .file)))).")
+                Text("\(needs) \(store.descriptor.title) (\(store.descriptor.size.formatted(.byteCount(style: .file)))).")
                     .font(Metrics.Text.caption)
                 HStack {
                     Button("Download") { store.startDownload() }
@@ -164,7 +188,7 @@ struct ModelSetupView: View {
     private func chooseFile() {
         NSApp.activate()
         let panel = NSOpenPanel()
-        panel.title = "Choose bge-m3 GGUF"
+        panel.title = "Choose the \(store.descriptor.title) GGUF"
         panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {

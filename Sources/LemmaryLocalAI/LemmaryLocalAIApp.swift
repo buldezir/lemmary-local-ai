@@ -36,10 +36,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         NSApp.setActivationPolicy(.accessory)
 
-        // A second copy would fight the first for both ports and restart
-        // forever, so it hands over and leaves.
+        // A second copy would fight the first for its ports and restart
+        // forever, so it hands over and leaves. A development build stays: it
+        // is started beside the installed app on ports of its own.
         let mine = NSRunningApplication.current
-        if let other = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
+        if !Preferences.isRunningFromBuildDirectory,
+           let other = NSRunningApplication.runningApplications(withBundleIdentifier: Bundle.main.bundleIdentifier ?? "")
             .first(where: { $0.processIdentifier != mine.processIdentifier }) {
             other.activate()
             NSApp.terminate(nil)

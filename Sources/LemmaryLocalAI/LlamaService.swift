@@ -2,17 +2,26 @@ import Foundation
 import LocalAIKit
 import Observation
 
-/// Runs the bundled `llama-server` with bge-m3 and keeps it running: what the
-/// `llama-embeddings` LaunchAgent with `KeepAlive` used to do.
+/// Runs one bundled `llama-server` and keeps it running: what the
+/// `llama-embeddings` LaunchAgent with `KeepAlive` used to do. The app has one
+/// for bge-m3 and one for the optional text model.
 @MainActor
 @Observable
-final class EmbeddingsService {
+final class LlamaService {
+    struct Launch {
+        var port: Int
+        var arguments: [String]
+    }
+
     private(set) var status: ServiceStatus = .stopped
     private(set) var memory: Int64?
     private(set) var port: Int = 0
 
-    private let modelStore: ModelStore
+    private let log: URL
+    private let model: @MainActor () -> URL?
+    private let launch: @MainActor (_ model: URL) -> Launch
     private var process: Process?
+    private var pidFile: URL?
     private var startedAt: ContinuousClock.Instant?
     private var backoff = Backoff()
     private var stopping = false
@@ -20,8 +29,13 @@ final class EmbeddingsService {
     private var restartTask: Task<Void, Never>?
     private var healthTask: Task<Void, Never>?
 
-    init(modelStore: ModelStore) {
-        self.modelStore = modelStore
+    /// `model` is the installed GGUF, nil while it still has to be downloaded;
+    /// `launch` turns it into a port and a command line, read from the settings
+    /// at every start.
+    init(log: URL, model: @escaping @MainActor () -> URL?, launch: @escaping @MainActor (_ model: URL) -> Launch) {
+        self.log = log
+        self.model = model
+        self.launch = launch
     }
 
     func start() {
@@ -29,7 +43,7 @@ final class EmbeddingsService {
         restartTask?.cancel()
         stopping = false
 
-        guard let model = modelStore.installedModel else {
+        guard let model = model() else {
             status = .needsSetup("Model not installed")
             return
         }
@@ -37,20 +51,16 @@ final class EmbeddingsService {
             status = .failed("llama-server is missing from the app bundle")
             return
         }
-        StaleProcess.reap(pidFile: Paths.llamaPIDFile)
+        let launch = launch(model)
+        let pidFile = Paths.llamaPIDFile(port: launch.port)
+        StaleProcess.reap(pidFile: pidFile)
 
-        let config = LlamaServerConfig(
-            modelPath: model.path,
-            host: Preferences.allowRemote ? "0.0.0.0" : "127.0.0.1",
-            port: Preferences.embeddingsPort,
-            contextTokens: Preferences.contextTokens
-        )
-        let log = LogFile.handleForChildProcess(Paths.llamaLog)
+        let output = LogFile.handleForChildProcess(log)
         let process = Process()
         process.executableURL = binary
-        process.arguments = config.arguments
-        process.standardOutput = log ?? FileHandle.nullDevice
-        process.standardError = log ?? FileHandle.nullDevice
+        process.arguments = launch.arguments
+        process.standardOutput = output ?? FileHandle.nullDevice
+        process.standardError = output ?? FileHandle.nullDevice
         process.standardInput = FileHandle.nullDevice
         process.qualityOfService = .userInitiated
         process.terminationHandler = { [weak self] finished in
@@ -64,14 +74,15 @@ final class EmbeddingsService {
             scheduleRestart()
             return
         }
-        try? log?.close()
+        try? output?.close()
 
         self.process = process
-        port = config.port
+        self.pidFile = pidFile
+        port = launch.port
         startedAt = .now
-        StaleProcess.record(process.processIdentifier, in: Paths.llamaPIDFile)
+        StaleProcess.record(process.processIdentifier, in: pidFile)
         status = .starting("Loading model")
-        watchHealth(port: config.port, pid: process.processIdentifier)
+        watchHealth(port: launch.port, pid: process.processIdentifier)
     }
 
     func stop() {
@@ -108,14 +119,18 @@ final class EmbeddingsService {
         if process.isRunning {
             kill(process.processIdentifier, SIGKILL)
         }
-        try? FileManager.default.removeItem(at: Paths.llamaPIDFile)
+        if let pidFile {
+            try? FileManager.default.removeItem(at: pidFile)
+        }
     }
 
     private func exited(status code: Int32) {
         process = nil
         healthTask?.cancel()
         memory = nil
-        try? FileManager.default.removeItem(at: Paths.llamaPIDFile)
+        if let pidFile {
+            try? FileManager.default.removeItem(at: pidFile)
+        }
 
         if restartWhenStopped {
             restartWhenStopped = false
@@ -129,7 +144,7 @@ final class EmbeddingsService {
         if let startedAt, ContinuousClock.now - startedAt > .seconds(60) {
             backoff.reset()
         }
-        let reason = Self.lastError(in: LogFile.tail(Paths.llamaLog)) ?? "llama-server exited with status \(code)"
+        let reason = Self.lastError(in: LogFile.tail(log)) ?? "llama-server exited with status \(code)"
         scheduleRestart(reason: reason)
     }
 
@@ -144,7 +159,7 @@ final class EmbeddingsService {
     }
 
     /// llama-server answers `/health` with 503 while it loads the model and 200
-    /// once it can embed.
+    /// once it can serve.
     private func watchHealth(port: Int, pid: pid_t) {
         healthTask?.cancel()
         let url = URL(string: "http://127.0.0.1:\(port)/health")!
