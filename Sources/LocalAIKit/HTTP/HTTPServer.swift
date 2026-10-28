@@ -2,7 +2,8 @@ import Foundation
 import Network
 
 /// A small HTTP/1.1 server on Network.framework: one request per connection,
-/// bodies by `Content-Length`, the handler run off the network queue.
+/// request bodies by `Content-Length`, the handler run off the network queue,
+/// responses by `Content-Length` or, for a stream, chunked.
 ///
 /// It exists so the app's one port needs no dependency: a few JSON routes, one
 /// multipart POST and a proxy, which a full web framework would dwarf.
@@ -125,6 +126,9 @@ final class HTTPConnection: @unchecked Sendable {
     private var sentContinue = false
     private var finished = false
     private var idleTimer: DispatchWorkItem?
+    /// Sends a streamed body; cancelled when the client goes away, which ends
+    /// the stream and whatever produces it.
+    private var streamTask: Task<Void, Never>?
 
     init(_ nw: NWConnection, server: HTTPServer) {
         self.nw = nw
@@ -210,8 +214,48 @@ final class HTTPConnection: @unchecked Sendable {
     private func respond(_ response: HTTPResponse) {
         guard !finished else { return }
         idleTimer?.cancel()
-        nw.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
-                completion: .contentProcessed { [self] _ in nw.cancel() })
+        guard let stream = response.stream else {
+            nw.send(content: response.serialized(), contentContext: .finalMessage, isComplete: true,
+                    completion: .contentProcessed { [self] _ in nw.cancel() })
+            return
+        }
+        nw.send(content: response.serializedHead(), completion: .idempotent)
+        streamTask = Task { [self] in
+            var complete = false
+            do {
+                for try await data in stream where !data.isEmpty {
+                    try await send(HTTPResponse.chunk(data))
+                }
+                try await send(HTTPResponse.lastChunk)
+                complete = true
+            } catch {
+                // The source failed midway, or the client left. The status went
+                // out long ago, so the stream ends without its last chunk, which
+                // tells the client it was cut.
+            }
+            server.queue.async { [self, complete] in
+                guard complete else { return nw.cancel() }
+                nw.send(content: nil, contentContext: .finalMessage, isComplete: true,
+                        completion: .contentProcessed { [self] _ in nw.cancel() })
+            }
+        }
+    }
+
+    /// One chunk out, returning once the network has taken it, so chunks go
+    /// out in order and a client that has gone is noticed at the next one.
+    private func send(_ data: Data) async throws {
+        try await withCheckedThrowingContinuation { (continuation: CheckedContinuation<Void, Error>) in
+            server.queue.async { [self] in
+                guard !finished else { return continuation.resume(throwing: CancellationError()) }
+                nw.send(content: data, completion: .contentProcessed { error in
+                    if let error {
+                        continuation.resume(throwing: error)
+                    } else {
+                        continuation.resume()
+                    }
+                })
+            }
+        }
     }
 
     private func armIdleTimer() {
@@ -227,6 +271,7 @@ final class HTTPConnection: @unchecked Sendable {
         guard !finished else { return }
         finished = true
         idleTimer?.cancel()
+        streamTask?.cancel()
         nw.stateUpdateHandler = nil
         onFinish?()
         onFinish = nil

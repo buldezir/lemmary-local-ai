@@ -13,9 +13,9 @@ import os
 enum Preferences {
     enum Key {
         static let port = "Port"
-        /// The embeddings server's port before everything moved to one; only
-        /// read to carry a changed value over.
-        static let legacyEmbeddingsPort = "EmbeddingsPort"
+        /// The OCR port before everything moved to one; only read to carry a
+        /// changed value over.
+        static let legacyOCRPort = "OCRPort"
         static let allowRemote = "AllowRemote"
         static let modelPath = "ModelPath"
         static let contextTokens = "ContextTokens"
@@ -31,12 +31,12 @@ enum Preferences {
         }
     }
 
-    /// 8080 is the embeddings port Lemmary's guide uses, so a Lemmary already
-    /// pointed at it keeps its embeddings when everything moves there.
+    /// 5001 is the docling port Lemmary's guide uses, so a Lemmary already
+    /// pointed at it keeps its OCR when everything moves there.
     static func registerDefaults() {
-        carryOverEmbeddingsPort()
+        carryOverOCRPort()
         UserDefaults.standard.register(defaults: [
-            Key.port: 8080,
+            Key.port: 5001,
             Key.allowRemote: true,
             Key.modelPath: "",
             Key.contextTokens: 8192,
@@ -48,12 +48,12 @@ enum Preferences {
         ])
     }
 
-    /// A changed embeddings port becomes the one port, since that is where
-    /// Lemmary's embeddings provider already points. Only a saved value: one
-    /// given on the command line is for that run.
-    private static func carryOverEmbeddingsPort() {
+    /// A changed OCR port becomes the one port, since that is where Lemmary's
+    /// docling provider already points. Only a saved value: one given on the
+    /// command line is for that run.
+    private static func carryOverOCRPort() {
         guard let domain = Bundle.main.bundleIdentifier.flatMap(UserDefaults.standard.persistentDomain(forName:)),
-              domain[Key.port] == nil, let old = domain[Key.legacyEmbeddingsPort] as? Int else { return }
+              domain[Key.port] == nil, let old = domain[Key.legacyOCRPort] as? Int else { return }
         UserDefaults.standard.set(old, forKey: Key.port)
     }
 

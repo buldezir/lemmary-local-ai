@@ -6,9 +6,9 @@ embeddings through a bundled `llama-server`, OCR through Apple Vision as an
 OpenAI chat model (`apple-vision-ocr`) and behind a docling-serve-compatible
 API, and, off by default, a small text model through a second `llama-server`
 for Lemmary's metadata extraction. It replaces the LaunchAgent setup in
-Lemmary's `docs/local_ai_macos.md`: same embeddings port (8080) and model name,
-same response shapes, so Lemmary's `local` and `docling` provider types still
-work against it.
+Lemmary's `docs/local_ai_macos.md`: same docling port (5001), embeddings model
+name and response shapes, so Lemmary's `local` and `docling` provider types
+still work against it.
 
 ## Layout
 
@@ -40,7 +40,7 @@ work against it.
 ## Architecture
 
 ```
-Lemmary ──:8080──> HTTPServer (in the app) ── APIRouter
+Lemmary ──:5001──> HTTPServer (in the app) ── APIRouter
                      │
                      ├ GET /v1/models: bge-m3, apple-vision-ocr, the text model
                      ├ POST /v1/chat/completions, model apple-vision-ocr ─┐ OCRChatEndpoint: data URL parts
@@ -95,11 +95,21 @@ Lemmary ──:8080──> HTTPServer (in the app) ── APIRouter
   (`aiprovider.ModelPurpose`: `llm`, `ocr`, `embedding`) and as Mistral's
   `capabilities` object, which Lemmary already parses. Until Lemmary reads them
   for its OpenAI type it guesses: a model is offered for embeddings only if its
-  id or name contains "embed", hence bge-m3's name. The llama-servers listen on free loopback ports chosen at each
-  start, and only the router talks to them. Its proxy buffers: a streamed
-  completion arrives whole.
+  id or name contains "embed", hence bge-m3's name. The llama-servers listen
+  on free loopback ports chosen at each start, and only the router talks to
+  them.
+- **A streamed completion is passed on as it arrives** (`UpstreamProxy`,
+  `StreamingFetch`), chunked. Nothing holds llama-server back for a slow
+  client: what it sends waits in the stream between the two, which for tokens
+  is little. A client that hangs up ends the stream, which cancels the upstream
+  request, and llama-server stops generating ("stop: cancel task" in its log).
+  `StreamingFetch` keeps only the stream's writing end: the session holds it
+  until the request ends, and holding the reading end too would keep the
+  stream alive after the client left, so generation would run on.
 - **Every HTTP response closes its connection** and request bodies need a
-  `Content-Length`; chunked uploads get 411. Lemmary's Go client, curl -F and
+  `Content-Length`; chunked uploads get 411. Responses have a
+  `Content-Length`, except a stream, which is chunked so a client can tell a
+  finished stream from a cut one. Lemmary's Go client, curl -F and
   Python requests all send a length. `Expect: 100-continue` is answered, or
   curl waits a second before every upload.
 - **The embeddings flags are measured ones** (`EmbeddingsServerConfig`). `-ub` must be

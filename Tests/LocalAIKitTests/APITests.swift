@@ -256,6 +256,93 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
     #expect(try errorMessage(response) == "the embeddings model is not running")
 }
 
+/// The router on a real socket in front of a streaming stand-in for
+/// llama-server, with URLSession as the client, the way an OpenAI SDK reads a
+/// streamed completion.
+private func streamingSetup(upstream handler: @escaping HTTPServer.Handler) async throws -> (front: HTTPServer, upstream: HTTPServer, port: UInt16) {
+    let upstreamPort = PortBox()
+    let upstream = HTTPServer(configuration: .init(port: 0, loopbackOnly: true), handler: handler,
+                              onStateChange: { if case .ready(let port) = $0 { upstreamPort.set(port) } })
+    try upstream.start()
+    let r = router(text: .init(model: "gemma-4-e4b", title: "Gemma 4 E4B", port: Int(try await upstreamPort.wait())))
+    let frontPort = PortBox()
+    let front = HTTPServer(configuration: .init(port: 0, loopbackOnly: true), handler: { await r.handle($0) },
+                           onStateChange: { if case .ready(let port) = $0 { frontPort.set(port) } })
+    try front.start()
+    return (front, upstream, try await frontPort.wait())
+}
+
+private func streamingRequest(port: UInt16) throws -> URLRequest {
+    var request = URLRequest(url: URL(string: "http://127.0.0.1:\(port)/v1/chat/completions")!)
+    request.httpMethod = "POST"
+    request.setValue("application/json", forHTTPHeaderField: "Content-Type")
+    request.httpBody = try JSONSerialization.data(withJSONObject: [
+        "model": "gemma-4-e4b", "stream": true, "messages": [["role": "user", "content": "hi"]],
+    ])
+    return request
+}
+
+private let eventStream = HTTPHeaders([("Content-Type", "text/event-stream")])
+
+@Test func streamedCompletionsArriveAsTheyAreMade() async throws {
+    let secondSent = Flag()
+    let (front, upstream, port) = try await streamingSetup { _ in
+        let (events, out) = AsyncThrowingStream<Data, Error>.makeStream()
+        Task {
+            out.yield(Data("data: {\"n\":1}\n\n".utf8))
+            try? await Task.sleep(for: .seconds(1))
+            secondSent.set()
+            out.yield(Data("data: {\"n\":2}\n\n".utf8))
+            out.yield(Data("data: [DONE]\n\n".utf8))
+            out.finish()
+        }
+        return .streaming(headers: eventStream, events)
+    }
+    defer { front.stop(); upstream.stop() }
+
+    let (bytes, response) = try await URLSession.shared.bytes(for: try streamingRequest(port: port))
+    #expect((response as? HTTPURLResponse)?.value(forHTTPHeaderField: "Content-Type") == "text/event-stream")
+    var lines: [String] = []
+    var secondSentBeforeFirstArrived: Bool?
+    for try await line in bytes.lines where !line.isEmpty {
+        if lines.isEmpty {
+            secondSentBeforeFirstArrived = secondSent.value
+        }
+        lines.append(line)
+    }
+    #expect(lines == [#"data: {"n":1}"#, #"data: {"n":2}"#, "data: [DONE]"])
+    // Buffered, the first event would only have come with the last.
+    #expect(secondSentBeforeFirstArrived == false)
+}
+
+@Test func aClientThatHangsUpStopsTheUpstream() async throws {
+    let stopped = Flag()
+    let (front, upstream, port) = try await streamingSetup { _ in
+        let (events, out) = AsyncThrowingStream<Data, Error>.makeStream()
+        out.onTermination = { _ in stopped.set() }
+        Task {
+            while case .enqueued = out.yield(Data("data: {\"token\":\"x\"}\n\n".utf8)) {
+                try? await Task.sleep(for: .milliseconds(50))
+            }
+        }
+        return .streaming(headers: eventStream, events)
+    }
+    defer { front.stop(); upstream.stop() }
+
+    let firstEvent = Flag()
+    let reader = Task {
+        let (bytes, _) = try await URLSession.shared.bytes(for: try streamingRequest(port: port))
+        for try await line in bytes.lines where !line.isEmpty {
+            firstEvent.set()
+        }
+    }
+    #expect(await firstEvent.wait(seconds: 3))
+    reader.cancel()
+    // The front notices on its next write, cancels its request upstream, and
+    // the upstream's connection notices on its next write in turn.
+    #expect(await stopped.wait(seconds: 5))
+}
+
 /// Echoes the request's target and JSON body; answers 418 for model "teapot".
 private struct FakeUpstream {
     let server: HTTPServer
@@ -290,5 +377,22 @@ private final class PortBox: @unchecked Sendable {
             try await Task.sleep(for: .milliseconds(20))
         }
         throw CancellationError()
+    }
+}
+
+private final class Flag: @unchecked Sendable {
+    private let lock = NSLock()
+    private var isSet = false
+
+    var value: Bool { lock.withLock { isSet } }
+    func set() { lock.withLock { isSet = true } }
+
+    func wait(seconds: Double) async -> Bool {
+        let deadline = ContinuousClock.now + .seconds(seconds)
+        while ContinuousClock.now < deadline {
+            if value { return true }
+            try? await Task.sleep(for: .milliseconds(20))
+        }
+        return value
     }
 }

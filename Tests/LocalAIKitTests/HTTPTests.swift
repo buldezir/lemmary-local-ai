@@ -58,6 +58,18 @@ import Testing
 
 // MARK: - header values
 
+@Test func aStreamIsChunked() {
+    let head = String(decoding: HTTPResponse.streaming(headers: HTTPHeaders([("Content-Type", "text/event-stream")]),
+                                                       AsyncThrowingStream { $0.finish() }).serializedHead(), as: UTF8.self)
+    #expect(head.hasPrefix("HTTP/1.1 200 OK\r\n"))
+    #expect(head.contains("Transfer-Encoding: chunked\r\n"))
+    #expect(head.contains("Connection: close\r\n"))
+    #expect(!head.contains("Content-Length"))
+    #expect(head.hasSuffix("\r\n\r\n"))
+    #expect(HTTPResponse.chunk(Data(repeating: 0x61, count: 26)) == Data("1a\r\n\(String(repeating: "a", count: 26))\r\n".utf8))
+    #expect(HTTPResponse.lastChunk == Data("0\r\n\r\n".utf8))
+}
+
 @Test func headerParametersHandleQuotesAndSemicolons() {
     let value = HeaderValue.parse(#"form-data; name="files"; filename="a;b \"c\".pdf""#)
     #expect(value.value == "form-data")

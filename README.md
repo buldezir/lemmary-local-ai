@@ -8,7 +8,7 @@ Python environment for docling-serve, an ocrmac patch and a watchdog script.
 
 ![The menu bar panel: the one URL to give Lemmary, and embeddings, OCR and the text model with their model names](docs/menu-bar.png)
 
-All three answer on one port, 8080, so Lemmary needs one provider for them:
+All three answer on one port, 5001, so Lemmary needs one provider for them:
 
 | | Embeddings | OCR | Text model (optional) |
 |---|---|---|---|
@@ -18,8 +18,8 @@ All three answer on one port, 8080, so Lemmary needs one provider for them:
 | API | OpenAI `/v1/embeddings` | OpenAI `/v1/chat/completions` with the document attached, or docling-serve's `POST /v1/convert/file` | OpenAI `/v1/chat/completions` |
 
 Lemmary needs no change: its OpenAI provider type reaches all three at
-`http://<mac>:8080/v1`, and its `local` embeddings and `docling` OCR types
-still work against the same port. The embeddings model's name is the one its
+`http://<mac>:5001/v1`, and its `local` embeddings and `docling` OCR types
+still work against the same port, docling's at the address its guide uses. The embeddings model's name is the one its
 guide already uses, so nothing needs re-embedding.
 
 ## Requirements
@@ -69,7 +69,7 @@ never sleep.
 
 Add one provider of type **OpenAI**:
 
-- base URL: the one the panel shows, e.g. `http://<mac>:8080/v1`
+- base URL: the one the panel shows, e.g. `http://<mac>:5001/v1`
 - API key: anything. Lemmary refuses an empty one; this app checks none.
 
 Then choose its models per job: `BAAI/bge-m3` for embeddings,
@@ -92,13 +92,12 @@ image Lemmary attaches, whatever the prompt says; a password-protected PDF
 comes back as an error with that reason.
 
 Lemmary's other two types work against the same port, for an install that
-already has them: a `local` embeddings provider at `http://<mac>:8080/v1`, and a
-`docling` OCR provider at `http://<mac>:8080`.
+already has them: a `local` embeddings provider at `http://<mac>:5001/v1`, and a
+`docling` OCR provider at `http://<mac>:5001`.
 
 ### Moving from the LaunchAgent setup
 
-The app takes port 8080, the embeddings service's, so stop the old services
-first:
+The app takes port 5001, docling-serve's, so stop the old services first:
 
 ```bash
 launchctl bootout gui/$(id -u)/<prefix>.docling-watchdog
@@ -106,20 +105,20 @@ launchctl bootout gui/$(id -u)/<prefix>.docling-serve
 launchctl bootout gui/$(id -u)/<prefix>.llama-embeddings
 ```
 
-In Lemmary, the embeddings provider can stay as it is; point the docling
-provider at `http://<mac>:8080`, or replace both with the one OpenAI provider
-above. Embedding vectors are identical to the Homebrew llama-server's (same
+In Lemmary, the docling provider can stay as it is; point the embeddings
+provider at `http://<mac>:5001/v1`, or replace both with the one OpenAI
+provider above. Embedding vectors are identical to the Homebrew llama-server's (same
 model file, cosine 1.000000), so nothing needs re-embedding. OCR text comes
 from Vision instead of docling's layout models; documents already processed
 keep their text.
 
 ### Moving from three ports
 
-Before everything moved to one port, OCR answered on 5001 and the text model on
-8081; neither is open any more. Point a `docling` provider at
-`http://<mac>:8080` and the text model's provider at `http://<mac>:8080/v1`, or
-replace all three with the one OpenAI provider. A changed embeddings port
-becomes the one port.
+Before everything moved to one port, embeddings answered on 8080, OCR on 5001
+and the text model on 8081. OCR keeps 5001; neither of the other two is open any
+more. Point a `local` embeddings provider at `http://<mac>:5001/v1` and the text
+model's provider there too, or replace all three with the one OpenAI provider.
+A changed OCR port becomes the one port.
 
 ## Settings
 
@@ -128,7 +127,7 @@ becomes the one port.
 | | Default | |
 |---|---|---|
 | Accept connections from other computers | on | off binds the port to 127.0.0.1 |
-| Port | 8080 | embeddings, OCR and the text model; the llama-servers behind it are on loopback |
+| Port | 5001 | embeddings, OCR and the text model; the llama-servers behind it are on loopback |
 | Longest input | 8192 tokens | 6144 uses less memory but fails Lemmary's longest inputs |
 | Documents at once | 2 | one warm OCR worker process per document |
 | Give up on a page after | 60 s | a page normally takes 0.1 to 0.3 s |

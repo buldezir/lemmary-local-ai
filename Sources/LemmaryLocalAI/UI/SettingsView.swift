@@ -6,7 +6,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @AppStorage(Preferences.Key.allowRemote) private var allowRemote = true
-    @AppStorage(Preferences.Key.port) private var port = 8080
+    @AppStorage(Preferences.Key.port) private var port = 5001
     @AppStorage(Preferences.Key.contextTokens) private var contextTokens = 8192
     @AppStorage(Preferences.Key.parallelConversions) private var parallelConversions = 2
     @AppStorage(Preferences.Key.pageTimeout) private var pageTimeout = 60
