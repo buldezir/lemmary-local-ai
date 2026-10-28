@@ -93,7 +93,10 @@ struct SettingsView: View {
             }
         }
         .formStyle(.grouped)
-        .frame(width: Metrics.settingsWidth)
+        .frame(minWidth: Metrics.settingsMinSize.width, minHeight: Metrics.settingsMinSize.height)
+        // A Settings window has a fixed size without this; the scene's
+        // `windowResizability` does not change that.
+        .windowResizeBehavior(.enabled)
         .onAppear { launchAtLogin = Preferences.launchAtLogin }
     }
 

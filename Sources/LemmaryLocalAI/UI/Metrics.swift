@@ -3,7 +3,11 @@ import SwiftUI
 /// The one place a size is written down.
 enum Metrics {
     static let popoverWidth: CGFloat = 360
-    static let settingsWidth: CGFloat = 480
+    /// The Settings window opens at this size and can be resized down to the
+    /// minimum. Wide enough that the pickers' labels and a model's path fit on
+    /// one line and the captions wrap less.
+    static let settingsSize = CGSize(width: 720, height: 760)
+    static let settingsMinSize = CGSize(width: 520, height: 400)
 
     static let gutter: CGFloat = 12
     static let section: CGFloat = 12

@@ -18,6 +18,7 @@ struct LemmaryLocalAIApp: App {
             SettingsView()
                 .environment(delegate.model)
         }
+        .defaultSize(Metrics.settingsSize)
     }
 }
 
