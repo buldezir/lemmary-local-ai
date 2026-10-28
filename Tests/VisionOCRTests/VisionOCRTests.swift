@@ -106,9 +106,18 @@ private func blankPDF(pages: Int, size: CGSize, password: String? = nil) throws 
     #expect(pixels.prefix(3) == Data([255, 255, 255]))
 }
 
+/// GitHub's macOS runners are virtual machines, where Vision's document reader
+/// fails at once with `.unknownError`; the same Xcode and macOS pass on the Mac
+/// mini.
+private let isVirtualMachine: Bool = {
+    var present: Int32 = 0
+    var size = MemoryLayout<Int32>.size
+    return sysctlbyname("kern.hv_vmm_present", &present, &size, nil, 0) == 0 && present == 1
+}()
+
 /// The real thing, once: Vision on the two-column fixture. Slow the first time
 /// a new test binary runs it (Vision loads its models), fast after.
-@Test(.timeLimit(.minutes(3)))
+@Test(.timeLimit(.minutes(3)), .enabled(if: !isVirtualMachine, "Vision's document reader fails in a virtual machine"))
 @MainActor
 func visionReadsTheFixture() async throws {
     let output = try await DocumentReader().read(try fixture("twocol.png"), kind: .image) { _, _ in }
