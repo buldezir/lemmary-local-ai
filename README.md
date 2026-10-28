@@ -29,12 +29,28 @@ provider type does.
 
 ## Install
 
+Download `LemmaryLocalAI-macOS-arm64.zip` from the latest
+[release](https://github.com/buldezir/lemmary-local-ai/releases), unzip it and
+drag `LemmaryLocalAI.app` into Applications before you open it: macOS runs an
+app opened where it was downloaded from a temporary copy, which can't update
+itself (`xattr -dr com.apple.quarantine /Applications/LemmaryLocalAI.app`
+fixes one that says it can't be updated). A release is signed with Developer
+ID, notarized, and updates itself: **Check for Updates…** is in the menu bar
+panel, and Settings turns the daily checks and automatic installs on and off.
+Embeddings, OCR and the text model stop for a few seconds while it updates.
+
+Or build it on the Mac that runs it:
+
 ```bash
 Scripts/release.sh --install       # builds /Applications/LemmaryLocalAI.app
 open /Applications/LemmaryLocalAI.app
 ```
 
-The menu bar icon opens a panel with both services, their URLs (with a copy
+That build is ad hoc signed for this Mac only, with version 0.1 and the commit
+as its build number, and doesn't update itself; installing it over a release
+replaces the copy that would have.
+
+The menu bar icon opens a panel with the services, their URLs (with a copy
 button for Lemmary's settings) and their state. On first launch it asks for the
 embeddings model: **Download** fetches bge-m3 (1.16 GB) and verifies its
 SHA-256, or **Use Existing File…** points at a GGUF you already have, such as
@@ -94,7 +110,7 @@ and Restart Services**; the menu bar panel then offers the download (5.0 or
 5.8 GB, checked against its SHA-256). In Lemmary, add a provider of type
 **OpenAI** with:
 
-- base URL: the one the panel shows, e.g. `http://192.168.20.33:8081/v1`
+- base URL: the one the panel shows, e.g. `http://<mac>:8081/v1`
 - model: the model name the panel shows, `gemma-4-e4b` or `ornith-1.5-9b`
 - API key: anything. Lemmary refuses an empty one; this service checks none.
 
@@ -143,6 +159,55 @@ docling's table model lines up borderless tables better; Vision keeps every
 value but sometimes merges or shifts cells. Vision also drops some short
 isolated tokens, such as a lone "Q1" in a table's first column. PPTX and XLSX
 are refused (Lemmary extracts XLSX itself); DOCX and HTML are converted as text.
+
+## Releases
+
+`.github/workflows/build.yml` builds releases only: a `v*` tag, or a run by
+hand. Pushes to `main` and pull requests build nothing. It runs on GitHub's
+Apple silicon `xcode-27` runner, builds the app with `Scripts/release.sh`,
+uploads it, then runs `swift test --no-parallel`; the release job publishes
+only after the tests pass.
+
+- The tag sets the version, and a build number that only grows
+  (`0.3.0-beta.2` → 30002, `0.3.0` → 30099), which Sparkle compares;
+  `bundle.sh` takes them as `VERSION` and `BUILD`. A local build is version
+  `0.1`, with the commit as its build, and doesn't update.
+- `bundle.sh` signs every binary in the app (`IDENTITY`) with the Developer ID
+  certificate in the repository's secrets (`MACOS_CERTIFICATE_P12_BASE64`,
+  `MACOS_CERTIFICATE_PASSWORD`): llama-server and its dylibs, ocr-worker,
+  Sparkle's helpers (`Scripts/sign-sparkle.sh`) and the app, with the hardened
+  runtime and a secure timestamp. The workflow notarizes it with an App Store
+  Connect API key (`NOTARY_API_KEY_BASE64`, `NOTARY_API_KEY_ID`,
+  `NOTARY_API_ISSUER_ID`) and staples the ticket. An ad hoc build goes without
+  the runtime, whose library validation would stop it loading
+  Sparkle.framework.
+- `Scripts/appcast.sh` writes the app's Sparkle feed,
+  `LemmaryLocalAI-macOS-appcast.xml`: the zip's EdDSA signature
+  (`SPARKLE_PRIVATE_KEY`, checked against the app's `SUPublicEDKey`) and the
+  release's notes up to its `## Downloads`, if the release is written by then.
+  The release job uploads the zip and `SHA256SUMS`, then the feed, which
+  `SUFeedURL` reads from the latest release.
+- A tag without the secrets fails. A run by hand takes a `version`, such as
+  `0.2.0-test.1`, to build an app that offers and takes updates, and a
+  `bundle_id`, such as `eu.buldezir.lemmary-local-ai.updatetest`, to keep it
+  apart from the installed one.
+
+The app updates itself with Sparkle (`AppUpdater`). `bundle.sh` copies
+Sparkle.framework into the app, where the binary finds it through
+`@executable_path/../Frameworks`; the helpers it starts never load it.
+Sparkle installs only updates signed with the key whose public half is
+`SUPublicEDKey` in `Resources/Info.plist`. Its private half is in the login
+keychain of the Mac mini that serves Lemmary (account `lemmary-local-ai`) and
+belongs in the repository's secrets; keep a backup, since without it the app
+can never update again:
+
+```bash
+swift build                                  # fetches Sparkle's tools into .build/artifacts
+sparkle=.build/artifacts/sparkle/Sparkle/bin
+$sparkle/generate_keys --account lemmary-local-ai -p      # prints the public key
+$sparkle/generate_keys --account lemmary-local-ai -x private-key
+gh secret set SPARKLE_PRIVATE_KEY < private-key && rm private-key
+```
 
 ## How it works
 

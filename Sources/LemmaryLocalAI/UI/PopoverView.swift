@@ -6,6 +6,7 @@ import UniformTypeIdentifiers
 struct PopoverView: View {
     @Environment(AppModel.self) private var app
     @Environment(\.openSettings) private var openSettings
+    private let updater = AppUpdater.shared
 
     var body: some View {
         VStack(alignment: .leading, spacing: Metrics.section) {
@@ -60,6 +61,10 @@ struct PopoverView: View {
             HStack {
                 Button("Restart") { app.restartAll() }
                 Button("Logs") { NSWorkspace.shared.open(Paths.logs) }
+                if updater.isRelease {
+                    Button(updater.menuTitle) { updater.checkForUpdates() }
+                        .disabled(!updater.canCheck && updater.available == nil)
+                }
                 Spacer()
                 Button("Quit") { NSApp.terminate(nil) }
             }

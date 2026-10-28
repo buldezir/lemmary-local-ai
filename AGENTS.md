@@ -26,8 +26,13 @@ Lemmary's metadata extraction, reached with Lemmary's OpenAI provider type.
   `UI/` the popover and Settings.
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
-  drive it. `Scripts/appicon.swift` draws `Resources/LemmaryLocalAI.icns`
-  (checked in; run it only to change the design).
+  drive it. `appcast.sh` and `sign-sparkle.sh` are the same files as in the
+  other Sparkle apps (proxmacs, zonetab, Herdglass); keep them in step.
+  `Scripts/appicon.swift` draws `Resources/LemmaryLocalAI.icns` (checked in;
+  run it only to change the design).
+- `.github/workflows/build.yml` builds, signs, notarizes and publishes a
+  release for a `v*` tag; README's Releases section has the details and the
+  secrets it needs.
 
 ## Architecture
 
@@ -112,8 +117,17 @@ Lemmary ──POST /v1/chat/completions> llama-server with the text model (optio
   testing beside the installed app on other ports; it shares the installed
   app's settings, so give it settings on the command line only.
 - **The ad-hoc signature in `bundle.sh` is not decoration.** Nested code is
-  signed inside out (dylibs, helpers, then the app). `SIGN_IDENTITY` switches to
-  a Developer ID with the hardened runtime, which notarization needs.
+  signed inside out (dylibs, helpers, Sparkle's helpers, then the app).
+  `IDENTITY` switches to a Developer ID with the hardened runtime, which
+  notarization needs; an ad hoc build must stay without the runtime, or library
+  validation stops it loading Sparkle.framework.
+- **Only a release updates itself** (`AppUpdater.isRelease`): its version is
+  X.Y.Z from a tag. A local build is `0.1` and never starts Sparkle, so a
+  development copy cannot replace the installed app. An update quits the app,
+  which stops every service until the new version has started them, a few
+  seconds. `SUPublicEDKey` must stay the public half of the key in the
+  repository's `SPARKLE_PRIVATE_KEY`; `appcast.sh` refuses a mismatch, since a
+  release signed with another key could never update again.
 
 ## Verify
 
@@ -129,6 +143,10 @@ curl -s localhost:18081/v1/chat/completions -H 'Content-Type: application/json' 
 
 `-TextModelPath-gemma-4-e4b <file>` points the text model at a GGUF already on
 disk instead of the download.
+
+On the Mac mini, SwiftPM can stall for good on a keychain prompt nobody sees
+when it downloads Sparkle's binary; `swift package --disable-keychain resolve`
+fetches it without asking the keychain, and later builds use that copy.
 
 The first conversion after a worker starts can take about 12 seconds once
 while Vision loads a model the warm-up page did not touch; the default page

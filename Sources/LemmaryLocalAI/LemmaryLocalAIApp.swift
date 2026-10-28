@@ -48,6 +48,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             return
         }
 
+        AppUpdater.shared.start()
         model.start()
     }
 

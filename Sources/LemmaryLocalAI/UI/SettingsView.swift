@@ -81,6 +81,8 @@ struct SettingsView: View {
                 caption("A document Lemmary sends is at most about 7,000 tokens. The rest is for the prompt, which grows with the archive's tags, correspondents and document types.")
             }
 
+            UpdatesSection()
+
             Section {
                 HStack {
                     Text("Version \(AppInfo.version)")
@@ -126,6 +128,27 @@ struct SettingsView: View {
         panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
         if panel.runModal() == .OK, let url = panel.url {
             store.useExisting(url)
+        }
+    }
+}
+
+/// Whether the app looks for updates, and installs them by itself.
+private struct UpdatesSection: View {
+    @Bindable private var updater = AppUpdater.shared
+
+    var body: some View {
+        if updater.isRelease {
+            Section {
+                Toggle("Check for updates automatically", isOn: $updater.checksAutomatically)
+                Toggle("Download and install automatically", isOn: $updater.downloadsAutomatically)
+                    .disabled(!updater.checksAutomatically)
+            } header: {
+                Text("Updates")
+            } footer: {
+                Text(updater.downloadsAutomatically && updater.checksAutomatically
+                     ? "Once a day. A new version installs the next time the app quits, such as at a restart of the Mac."
+                     : "Once a day. A new version waits in the menu bar panel until you install it; the services stop for a few seconds while it does.")
+            }
         }
     }
 }

@@ -13,6 +13,10 @@ let package = Package(
         .executable(name: "ocr-worker", targets: ["OCRWorker"]),
         .library(name: "LocalAIKit", targets: ["LocalAIKit"]),
     ],
+    dependencies: [
+        // The app's updater; Scripts/appcast.sh writes its feed.
+        .package(url: "https://github.com/sparkle-project/Sparkle", .upToNextMinor(from: "2.10.0")),
+    ],
     targets: [
         // Everything decided without a window, Vision or a model: HTTP, multipart,
         // the docling-compatible API, layout-to-markdown, the worker protocol and
@@ -35,7 +39,10 @@ let package = Package(
         ),
         .executableTarget(
             name: "LemmaryLocalAI",
-            dependencies: ["LocalAIKit"],
+            dependencies: [
+                "LocalAIKit",
+                .product(name: "Sparkle", package: "Sparkle"),
+            ],
             path: "Sources/LemmaryLocalAI",
             linkerSettings: [
                 .linkedFramework("AppKit"),

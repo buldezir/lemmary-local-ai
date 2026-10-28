@@ -27,8 +27,13 @@ enum Paths {
 }
 
 enum AppInfo {
+    /// "0.2.0 (20099)" for a release, "0.1 (a9c5e4c)" for a local build, whose
+    /// build is the commit it was made from.
     static var version: String {
-        Bundle.main.object(forInfoDictionaryKey: "CFBundleShortVersionString") as? String ?? "dev"
+        let info = Bundle.main.infoDictionary ?? [:]
+        let short = info["CFBundleShortVersionString"] as? String ?? "dev"
+        guard let build = info["CFBundleVersion"] as? String, build != short else { return short }
+        return "\(short) (\(build))"
     }
 }
 

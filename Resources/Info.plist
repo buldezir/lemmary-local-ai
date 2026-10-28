@@ -18,8 +18,10 @@
 	<string>Lemmary Local AI</string>
 	<key>CFBundlePackageType</key>
 	<string>APPL</string>
+	<!-- A local build. A release's version and build number come from its tag
+	     (.github/workflows/build.yml); 0.1 is not one, so it never updates. -->
 	<key>CFBundleShortVersionString</key>
-	<string>0.1.0</string>
+	<string>0.1</string>
 	<key>CFBundleVersion</key>
 	<string>1</string>
 	<key>LSMinimumSystemVersion</key>
@@ -36,5 +38,13 @@
 	<true/>
 	<key>NSHumanReadableCopyright</key>
 	<string>(c) 2026 Alexander Arutyunov.</string>
+	<!-- Sparkle (AppUpdater): the latest release's feed, which
+	     Scripts/appcast.sh writes, and the key its updates are signed with. -->
+	<key>SUEnableAutomaticChecks</key>
+	<true/>
+	<key>SUFeedURL</key>
+	<string>https://github.com/buldezir/lemmary-local-ai/releases/latest/download/LemmaryLocalAI-macOS-appcast.xml</string>
+	<key>SUPublicEDKey</key>
+	<string>wuV3Mxm8tUcf9QK2MYntEZcdlKlUZkG5gYyrox1x/8c=</string>
 </dict>
 </plist>
