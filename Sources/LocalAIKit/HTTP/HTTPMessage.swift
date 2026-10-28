@@ -21,6 +21,7 @@ public struct HTTPStatus: Sendable, Equatable {
     public static let headersTooLarge = HTTPStatus(431, "Request Header Fields Too Large")
     public static let internalServerError = HTTPStatus(500, "Internal Server Error")
     public static let notImplemented = HTTPStatus(501, "Not Implemented")
+    public static let badGateway = HTTPStatus(502, "Bad Gateway")
     public static let serviceUnavailable = HTTPStatus(503, "Service Unavailable")
     public static let gatewayTimeout = HTTPStatus(504, "Gateway Timeout")
 }

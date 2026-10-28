@@ -24,12 +24,13 @@ struct PopoverView: View {
                 .help("Settings")
             }
 
+            AddressRow(url: app.apiURL, status: app.api.status)
+
             ServiceRow(
                 title: "Embeddings",
                 engine: "bge-m3 on llama.cpp",
                 status: app.embeddings.status,
-                url: app.embeddingsURL,
-                detail: memoryDetail(app.embeddings)
+                detail: modelDetail(ModelDescriptor.bgeM3.name, memoryDetail(app.embeddings))
             )
             if case .needsSetup = app.embeddings.status {
                 ModelSetupView(store: app.modelStore, needs: "Embeddings need")
@@ -39,8 +40,7 @@ struct PopoverView: View {
                 title: "OCR",
                 engine: "Apple Vision, docling-compatible",
                 status: app.ocr.status,
-                url: app.ocrURL,
-                detail: ocrDetail
+                detail: modelDetail(OCRChatEndpoint.model, ocrDetail)
             )
 
             if app.textEnabled {
@@ -48,8 +48,7 @@ struct PopoverView: View {
                     title: "Text model",
                     engine: "\(app.textModel.descriptor.title) on llama.cpp",
                     status: app.text.status,
-                    url: app.textURL,
-                    detail: textDetail
+                    detail: modelDetail(app.textModel.descriptor.name, memoryDetail(app.text))
                 )
                 if case .needsSetup = app.text.status {
                     ModelSetupView(store: app.textModelStore, needs: "The text model needs")
@@ -79,9 +78,9 @@ struct PopoverView: View {
         service.memory.map { "\($0.formatted(.byteCount(style: .memory))) in memory" }
     }
 
-    /// Lemmary's OpenAI provider type asks for a model name as well as the URL.
-    private var textDetail: String {
-        ["Model name \(app.textModel.descriptor.name)", memoryDetail(app.text)].compactMap(\.self).joined(separator: " · ")
+    /// Lemmary's OpenAI provider asks for a model name for each job.
+    private func modelDetail(_ name: String, _ more: String?) -> String {
+        ["Model name \(name)", more].compactMap(\.self).joined(separator: " · ")
     }
 
     private var ocrDetail: String? {
@@ -100,11 +99,44 @@ struct PopoverView: View {
     }
 }
 
+/// The one URL to give Lemmary: the base URL of an OpenAI provider that serves
+/// all three. A docling provider takes it without `/v1`.
+struct AddressRow: View {
+    let url: String
+    let status: ServiceStatus
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: Metrics.rowSpacing) {
+            Text("OpenAI base URL for Lemmary")
+                .font(Metrics.Text.caption)
+                .foregroundStyle(.secondary)
+            HStack(spacing: Metrics.tight) {
+                Text(url)
+                    .font(Metrics.Text.mono)
+                    .textSelection(.enabled)
+                Button {
+                    NSPasteboard.general.clearContents()
+                    NSPasteboard.general.setString(url, forType: .string)
+                } label: {
+                    Image(systemName: "doc.on.doc")
+                }
+                .buttonStyle(.borderless)
+                .help("Copy the URL to give Lemmary")
+            }
+            if status != .ready {
+                Text(status.label)
+                    .font(Metrics.Text.caption)
+                    .foregroundStyle(status.color)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+        }
+    }
+}
+
 struct ServiceRow: View {
     let title: String
     let engine: String
     let status: ServiceStatus
-    let url: String
     let detail: String?
 
     var body: some View {
@@ -124,19 +156,6 @@ struct ServiceRow: View {
                 .font(Metrics.Text.caption)
                 .foregroundStyle(status == .ready ? .secondary : status.color)
                 .fixedSize(horizontal: false, vertical: true)
-            HStack(spacing: Metrics.tight) {
-                Text(url)
-                    .font(Metrics.Text.mono)
-                    .textSelection(.enabled)
-                Button {
-                    NSPasteboard.general.clearContents()
-                    NSPasteboard.general.setString(url, forType: .string)
-                } label: {
-                    Image(systemName: "doc.on.doc")
-                }
-                .buttonStyle(.borderless)
-                .help("Copy the URL to give Lemmary")
-            }
             if let detail {
                 Text(detail)
                     .font(Metrics.Text.caption)

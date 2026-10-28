@@ -1,7 +1,7 @@
 #!/bin/bash
 # Debug build of LemmaryLocalAI.app in .build/. With --run, starts it; any
 # further arguments go to the app, e.g. to run beside an existing setup:
-#   Scripts/dev.sh --run -EmbeddingsPort 18080 -OCRPort 15001
+#   Scripts/dev.sh --run -Port 18080
 set -euo pipefail
 cd "$(dirname "$0")/.."
 

@@ -4,8 +4,8 @@ import Network
 /// A small HTTP/1.1 server on Network.framework: one request per connection,
 /// bodies by `Content-Length`, the handler run off the network queue.
 ///
-/// It exists so the OCR endpoint needs no dependency: the API it serves is two
-/// GETs and one multipart POST, which a full web framework would dwarf.
+/// It exists so the app's one port needs no dependency: a few JSON routes, one
+/// multipart POST and a proxy, which a full web framework would dwarf.
 public final class HTTPServer: @unchecked Sendable {
     public typealias Handler = @Sendable (HTTPRequest) async -> HTTPResponse
 

@@ -96,54 +96,22 @@ public struct DoclingEndpoint: Sendable {
         }
 
         let filename = file.filename ?? "document"
-        let media = MediaType.resolve(declared: file.contentType, filename: file.filename, data: file.body)
-        guard let kind = media.kind else {
-            return .detail(.unsupportedMediaType, "unsupported format \(media.mimeType)")
-        }
-
-        let input = uploadDirectory.appending(path: "\(UUID().uuidString).\(MediaType.fileExtension(forMIME: media.mimeType))")
-        do {
-            try FileManager.default.createDirectory(at: uploadDirectory, withIntermediateDirectories: true)
-            try file.body.write(to: input)
-        } catch {
-            return .detail(.internalServerError, "could not stage the upload: \(error.localizedDescription)")
-        }
-        defer { try? FileManager.default.removeItem(at: input) }
-
-        let started = ContinuousClock.now
-        func event(pages: Int?, failure: String?) -> ConversionEvent {
-            ConversionEvent(filename: filename, mimeType: media.mimeType, bytes: file.body.count, pages: pages,
-                            duration: (ContinuousClock.now - started).seconds, failure: failure)
-        }
-
-        do {
-            switch try await converter.convert(file: input, kind: kind) {
-            case .converted(let markdown, let pages):
-                let done = event(pages: pages, failure: nil)
-                onConversion(done)
-                return .json(ConvertDocumentResponse(
-                    document: .init(filename: filename, mdContent: markdown),
-                    status: "success", errors: [], processingTime: done.duration))
-            case .failed(let reason):
-                let done = event(pages: nil, failure: reason)
-                onConversion(done)
-                return .json(ConvertDocumentResponse(
-                    document: .init(filename: filename, mdContent: ""),
-                    status: "failure",
-                    errors: [.init(componentType: "document_backend", moduleName: "apple-vision", errorMessage: reason)],
-                    processingTime: done.duration))
-            }
-        } catch let failure as WorkerFailure {
-            onConversion(event(pages: nil, failure: failure.description))
-            switch failure {
-            case .stalled, .timedOut:
-                return .detail(.gatewayTimeout, failure.description)
-            case .launch, .crashed:
-                return .detail(.internalServerError, failure.description)
-            }
-        } catch {
-            onConversion(event(pages: nil, failure: "\(error)"))
-            return .detail(.internalServerError, "\(error)")
+        let conversion = UploadConversion(converter: converter, uploadDirectory: uploadDirectory, onConversion: onConversion)
+        switch await conversion.run(data: file.body, declaredType: file.contentType, filename: file.filename) {
+        case .converted(let markdown, _, let duration):
+            return .json(ConvertDocumentResponse(
+                document: .init(filename: filename, mdContent: markdown),
+                status: "success", errors: [], processingTime: duration))
+        case .documentFailed(let reason, let duration):
+            return .json(ConvertDocumentResponse(
+                document: .init(filename: filename, mdContent: ""),
+                status: "failure",
+                errors: [.init(componentType: "document_backend", moduleName: "apple-vision", errorMessage: reason)],
+                processingTime: duration))
+        case .unsupported(let mimeType):
+            return .detail(.unsupportedMediaType, "unsupported format \(mimeType)")
+        case .serverError(let status, let message):
+            return .detail(status, message)
         }
     }
 }

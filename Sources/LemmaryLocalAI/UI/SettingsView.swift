@@ -6,9 +6,7 @@ import UniformTypeIdentifiers
 struct SettingsView: View {
     @Environment(AppModel.self) private var app
     @AppStorage(Preferences.Key.allowRemote) private var allowRemote = true
-    @AppStorage(Preferences.Key.embeddingsPort) private var embeddingsPort = 8080
-    @AppStorage(Preferences.Key.ocrPort) private var ocrPort = 5001
-    @AppStorage(Preferences.Key.textModelPort) private var textModelPort = 8081
+    @AppStorage(Preferences.Key.port) private var port = 8080
     @AppStorage(Preferences.Key.contextTokens) private var contextTokens = 8192
     @AppStorage(Preferences.Key.parallelConversions) private var parallelConversions = 2
     @AppStorage(Preferences.Key.pageTimeout) private var pageTimeout = 60
@@ -35,10 +33,9 @@ struct SettingsView: View {
 
             Section("Network") {
                 Toggle("Accept connections from other computers", isOn: $allowRemote)
-                caption("Lemmary usually runs on another machine and reaches this Mac over the LAN. Off, every service listens on 127.0.0.1 only. There is no authentication either way.")
-                TextField("Embeddings port", value: $embeddingsPort, format: .number.grouping(.never))
-                TextField("OCR port", value: $ocrPort, format: .number.grouping(.never))
-                TextField("Text model port", value: $textModelPort, format: .number.grouping(.never))
+                caption("Lemmary usually runs on another machine and reaches this Mac over the LAN. Off, the port listens on 127.0.0.1 only. There is no authentication either way.")
+                TextField("Port", value: $port, format: .number.grouping(.never))
+                caption("Embeddings, OCR and the text model all answer on this one port, so Lemmary needs one OpenAI provider for all three.")
             }
 
             Section("Embeddings") {
@@ -67,7 +64,7 @@ struct SettingsView: View {
 
             Section("Text model") {
                 Toggle("Serve a text model", isOn: $textModelEnabled)
-                caption("For Lemmary's metadata extraction: title, date, tags and summary. In Lemmary, add an OpenAI provider with this service's URL, its model name and any API key, and use it for extraction only.")
+                caption("For Lemmary's metadata extraction: title, date, tags and summary. In Lemmary, choose this model's name on the same OpenAI provider, for extraction only.")
                 Picker("Model", selection: Binding(
                     get: { selectedTextModel.rawValue },
                     set: { textModel = $0 }

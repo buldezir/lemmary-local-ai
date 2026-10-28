@@ -6,19 +6,21 @@ Lemmary's metadata extraction. It replaces the hand-built setup in Lemmary's
 `docs/local_ai_macos.md`: three LaunchAgents, Homebrew's llama.cpp, a 2 GB
 Python environment for docling-serve, an ocrmac patch and a watchdog script.
 
-![The menu bar panel: embeddings, OCR and the text model, each with the URL to give Lemmary](docs/menu-bar.png)
+![The menu bar panel: the one URL to give Lemmary, and embeddings, OCR and the text model with their model names](docs/menu-bar.png)
+
+All three answer on one port, 8080, so Lemmary needs one provider for them:
 
 | | Embeddings | OCR | Text model (optional) |
 |---|---|---|---|
 | Engine | `llama-server` (llama.cpp, Metal), bundled | Apple Vision `RecognizeDocumentsRequest` | a second `llama-server` |
 | Model | `BAAI/bge-m3`, F16 GGUF, downloaded and checksummed on first run | built into macOS | one of five 4-bit GGUFs, the larger ones on a Mac with 24 or 32 GB, downloaded and checksummed when turned on |
-| API | OpenAI `/v1/embeddings` | docling-serve's `POST /v1/convert/file` | OpenAI `/v1/chat/completions` |
-| Lemmary SDK | Local Embeddings (`local`) | Local OCR (`docling`) | OpenAI (`openai`) with a base URL |
-| Default URL | `http://<mac>:8080/v1` | `http://<mac>:5001` | `http://<mac>:8081/v1` |
+| Model name in Lemmary | `BAAI/bge-m3` | `apple-vision-ocr` | `gemma-4-e4b`, or the one chosen |
+| API | OpenAI `/v1/embeddings` | OpenAI `/v1/chat/completions` with the document attached, or docling-serve's `POST /v1/convert/file` | OpenAI `/v1/chat/completions` |
 
-Lemmary needs no change: the ports, the model name and the API shapes are the
-ones its guide already uses, and the text model speaks the API its OpenAI
-provider type does.
+Lemmary needs no change: its OpenAI provider type reaches all three at
+`http://<mac>:8080/v1`, and its `local` embeddings and `docling` OCR types
+still work against the same port. The embeddings model's name is the one its
+guide already uses, so nothing needs re-embedding.
 
 ## Requirements
 
@@ -53,8 +55,8 @@ That build is ad hoc signed for this Mac only, with version 0.1 and the commit
 as its build number, and doesn't update itself; installing it over a release
 replaces the copy that would have.
 
-The menu bar icon opens a panel with the services, their URLs (with a copy
-button for Lemmary's settings) and their state. On first launch it asks for the
+The menu bar icon opens a panel with the URL to give Lemmary (with a copy
+button), the services, their model names and their state. On first launch it asks for the
 embeddings model: **Download** fetches bge-m3 (1.16 GB) and verifies its
 SHA-256, or **Use Existing File…** points at a GGUF you already have, such as
 `~/ai/models/bge-m3-f16.gguf` from the old setup.
@@ -63,9 +65,40 @@ Turn on **Launch at login** in Settings. Like the LaunchAgents it replaces, it
 runs in a logged-in session: on a headless Mac, enable automatic login and
 never sleep.
 
+### In Lemmary
+
+Add one provider of type **OpenAI**:
+
+- base URL: the one the panel shows, e.g. `http://<mac>:8080/v1`
+- API key: anything. Lemmary refuses an empty one; this app checks none.
+
+Then choose its models per job: `BAAI/bge-m3` for embeddings,
+`apple-vision-ocr` for OCR, and the text model's name (see
+[Text model](#text-model)) for extraction only. Lemmary's pickers list them
+from `GET /v1/models`, where each model says what it is for:
+
+| Model | `purposes` | `capabilities` | `context_length` |
+|---|---|---|---|
+| `BAAI/bge-m3` | `["embedding"]` | `embeddings` | the embeddings context, 8192 |
+| `apple-vision-ocr` | `["ocr"]` | `ocr` | none |
+| the text model, while it is on | `["llm"]` | `completion_chat` | the text model's context, 16,384 |
+
+`purposes` uses Lemmary's own names for the jobs, and `capabilities` is
+Mistral's object (`completion_chat`, `ocr`) with an `embeddings` flag beside
+them. Lemmary reads both only for some provider types today, so until it reads
+`purposes` its chat and OCR pickers offer both of those models; any can be
+chosen by name. `GET /v1/models/{id}` answers for one model. The OCR model reads the PDF or
+image Lemmary attaches, whatever the prompt says; a password-protected PDF
+comes back as an error with that reason.
+
+Lemmary's other two types work against the same port, for an install that
+already has them: a `local` embeddings provider at `http://<mac>:8080/v1`, and a
+`docling` OCR provider at `http://<mac>:8080`.
+
 ### Moving from the LaunchAgent setup
 
-The app uses the same ports, so stop the old services first:
+The app takes port 8080, the embeddings service's, so stop the old services
+first:
 
 ```bash
 launchctl bootout gui/$(id -u)/<prefix>.docling-watchdog
@@ -73,10 +106,20 @@ launchctl bootout gui/$(id -u)/<prefix>.docling-serve
 launchctl bootout gui/$(id -u)/<prefix>.llama-embeddings
 ```
 
-In Lemmary, leave both providers as they are. Embedding vectors are identical
-to the Homebrew llama-server's (same model file, cosine 1.000000), so nothing
-needs re-embedding. OCR text comes from Vision instead of docling's layout
-models; documents already processed keep their text.
+In Lemmary, the embeddings provider can stay as it is; point the docling
+provider at `http://<mac>:8080`, or replace both with the one OpenAI provider
+above. Embedding vectors are identical to the Homebrew llama-server's (same
+model file, cosine 1.000000), so nothing needs re-embedding. OCR text comes
+from Vision instead of docling's layout models; documents already processed
+keep their text.
+
+### Moving from three ports
+
+Before everything moved to one port, OCR answered on 5001 and the text model on
+8081; neither is open any more. Point a `docling` provider at
+`http://<mac>:8080` and the text model's provider at `http://<mac>:8080/v1`, or
+replace all three with the one OpenAI provider. A changed embeddings port
+becomes the one port.
 
 ## Settings
 
@@ -84,22 +127,20 @@ models; documents already processed keep their text.
 
 | | Default | |
 |---|---|---|
-| Accept connections from other computers | on | off binds both services to 127.0.0.1 |
-| Embeddings / OCR port | 8080 / 5001 | |
+| Accept connections from other computers | on | off binds the port to 127.0.0.1 |
+| Port | 8080 | embeddings, OCR and the text model; the llama-servers behind it are on loopback |
 | Longest input | 8192 tokens | 6144 uses less memory but fails Lemmary's longest inputs |
 | Documents at once | 2 | one warm OCR worker process per document |
 | Give up on a page after | 60 s | a page normally takes 0.1 to 0.3 s |
 | Serve a text model | off | |
 | Text model | Gemma 4 E4B | or a larger one, by the Mac's memory; see below |
-| Text model port | 8081 | |
 | Text model context | 16,384 tokens | 32,768 costs 0.3 to 0.6 GB more |
 
 Any setting can be overridden for one run, which is how a second copy runs
 beside an installed one:
 
 ```bash
-Scripts/dev.sh --run -EmbeddingsPort 18080 -OCRPort 15001 -TextModelPort 18081 \
-  -ModelPath ~/ai/models/bge-m3-f16.gguf
+Scripts/dev.sh --run -Port 18080 -ModelPath ~/ai/models/bge-m3-f16.gguf
 ```
 
 A copy started from `.build` shares the installed app's settings (same bundle
@@ -123,12 +164,10 @@ memory, and a choice carried over from a bigger Mac falls back to Gemma 4 E4B:
 
 ![The text model in Settings: the model with its memory and time a document, and what it does well and badly](docs/settings-text-model.png)
 
-In Lemmary, add a provider of type **OpenAI** with:
-
-- base URL: the one the panel shows, e.g. `http://<mac>:8081/v1`
-- model: the model name the panel shows: `gemma-4-e4b`, `ornith-1.5-9b`,
-  `gemma-4-12b`, `gemma-4-26b-a4b` or `qwen3.6-35b-a3b`
-- API key: anything. Lemmary refuses an empty one; this service checks none.
+In Lemmary, choose the model name the panel shows on the OpenAI provider
+([In Lemmary](#in-lemmary)): `gemma-4-e4b`, `ornith-1.5-9b`, `gemma-4-12b`,
+`gemma-4-26b-a4b` or `qwen3.6-35b-a3b`. Any other name, except
+`apple-vision-ocr`, also reaches whichever model Settings has chosen.
 
 Use it for extraction (title, date, type, correspondent, tags, suggested tags,
 summary) and keep chat and Deep Search on a hosted model: a model this size is

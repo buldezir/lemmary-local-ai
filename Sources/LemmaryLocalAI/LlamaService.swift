@@ -9,13 +9,23 @@ import Observation
 @Observable
 final class LlamaService {
     struct Launch {
+        /// On loopback, where only the app's own server talks to it.
         var port: Int
+        var pidFile: URL
         var arguments: [String]
+        /// The context it is started with, in tokens, for `/v1/models`.
+        var contextTokens: Int
     }
 
     private(set) var status: ServiceStatus = .stopped
     private(set) var memory: Int64?
     private(set) var port: Int = 0
+
+    /// Where requests for this model go now: nil while no process is running.
+    /// llama-server itself answers 503 while it loads.
+    var listeningPort: Int? { process == nil ? nil : port }
+    /// The context the running server was started with; nil before a start.
+    private(set) var contextTokens: Int?
 
     private let log: URL
     private let model: @MainActor () -> URL?
@@ -30,8 +40,8 @@ final class LlamaService {
     private var healthTask: Task<Void, Never>?
 
     /// `model` is the installed GGUF, nil while it still has to be downloaded;
-    /// `launch` turns it into a port and a command line, read from the settings
-    /// at every start.
+    /// `launch` turns it into a port, a pid file and a command line, read from
+    /// the settings at every start.
     init(log: URL, model: @escaping @MainActor () -> URL?, launch: @escaping @MainActor (_ model: URL) -> Launch) {
         self.log = log
         self.model = model
@@ -52,7 +62,7 @@ final class LlamaService {
             return
         }
         let launch = launch(model)
-        let pidFile = Paths.llamaPIDFile(port: launch.port)
+        let pidFile = launch.pidFile
         StaleProcess.reap(pidFile: pidFile)
 
         let output = LogFile.handleForChildProcess(log)
@@ -79,6 +89,7 @@ final class LlamaService {
         self.process = process
         self.pidFile = pidFile
         port = launch.port
+        contextTokens = launch.contextTokens
         startedAt = .now
         StaleProcess.record(process.processIdentifier, in: pidFile)
         status = .starting("Loading model")

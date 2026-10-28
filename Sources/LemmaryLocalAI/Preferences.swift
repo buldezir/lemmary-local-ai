@@ -8,12 +8,14 @@ import os
 ///
 /// Any of them can be overridden for one run from the command line, which is
 /// how a second copy is tested next to a running one:
-/// `LemmaryLocalAI -EmbeddingsPort 18080 -OCRPort 15001`.
+/// `LemmaryLocalAI -Port 18080`.
 @MainActor
 enum Preferences {
     enum Key {
-        static let embeddingsPort = "EmbeddingsPort"
-        static let ocrPort = "OCRPort"
+        static let port = "Port"
+        /// The embeddings server's port before everything moved to one; only
+        /// read to carry a changed value over.
+        static let legacyEmbeddingsPort = "EmbeddingsPort"
         static let allowRemote = "AllowRemote"
         static let modelPath = "ModelPath"
         static let contextTokens = "ContextTokens"
@@ -21,7 +23,6 @@ enum Preferences {
         static let pageTimeout = "PageTimeout"
         static let textModelEnabled = "TextModelEnabled"
         static let textModel = "TextModel"
-        static let textModelPort = "TextModelPort"
         static let textContextTokens = "TextContextTokens"
 
         /// One per model, so switching between them keeps each one's file.
@@ -30,12 +31,12 @@ enum Preferences {
         }
     }
 
-    /// The ports are the ones Lemmary's guide uses, so moving from the
-    /// LaunchAgent setup to the app changes nothing on Lemmary's side.
+    /// 8080 is the embeddings port Lemmary's guide uses, so a Lemmary already
+    /// pointed at it keeps its embeddings when everything moves there.
     static func registerDefaults() {
+        carryOverEmbeddingsPort()
         UserDefaults.standard.register(defaults: [
-            Key.embeddingsPort: 8080,
-            Key.ocrPort: 5001,
+            Key.port: 8080,
             Key.allowRemote: true,
             Key.modelPath: "",
             Key.contextTokens: 8192,
@@ -43,14 +44,22 @@ enum Preferences {
             Key.pageTimeout: 60,
             Key.textModelEnabled: false,
             Key.textModel: TextModel.gemma4E4B.rawValue,
-            Key.textModelPort: 8081,
             Key.textContextTokens: 16384,
         ])
     }
 
-    static var embeddingsPort: Int { port(Key.embeddingsPort) }
-    static var ocrPort: Int { port(Key.ocrPort) }
-    static var textModelPort: Int { port(Key.textModelPort) }
+    /// A changed embeddings port becomes the one port, since that is where
+    /// Lemmary's embeddings provider already points. Only a saved value: one
+    /// given on the command line is for that run.
+    private static func carryOverEmbeddingsPort() {
+        guard let domain = Bundle.main.bundleIdentifier.flatMap(UserDefaults.standard.persistentDomain(forName:)),
+              domain[Key.port] == nil, let old = domain[Key.legacyEmbeddingsPort] as? Int else { return }
+        UserDefaults.standard.set(old, forKey: Key.port)
+    }
+
+    /// Every service is on this one port; the llama-servers behind it are on
+    /// loopback ports of their own.
+    static var port: Int { validPort(Key.port) }
 
     /// On by default: Lemmary runs on another machine and reaches this one over
     /// the LAN. Off binds every service to 127.0.0.1.
@@ -71,7 +80,7 @@ enum Preferences {
     static var physicalMemory: UInt64 { ProcessInfo.processInfo.physicalMemory }
     static var textContextTokens: Int { max(4096, UserDefaults.standard.integer(forKey: Key.textContextTokens)) }
 
-    private static func port(_ key: String) -> Int {
+    private static func validPort(_ key: String) -> Int {
         let value = UserDefaults.standard.integer(forKey: key)
         return (1...65535).contains(value) ? value : 0
     }

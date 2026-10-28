@@ -11,6 +11,8 @@ final class AppModel {
     let embeddings: LlamaService
     let text: LlamaService
     let ocr = OCRService()
+    /// The one port everything is reached on.
+    private(set) var api: APIService!
     private(set) var lanAddress: String?
     /// The text model settings as last applied, not as the Settings window has
     /// them now: those take effect with "Apply and Restart Services".
@@ -27,11 +29,12 @@ final class AppModel {
         embeddings = LlamaService(log: Paths.llamaLog, model: { embeddingsStore.installedModel }) { model in
             let config = EmbeddingsServerConfig(
                 modelPath: model.path,
-                host: Preferences.listenHost,
-                port: Preferences.embeddingsPort,
+                host: "127.0.0.1",
+                port: HostInfo.freeLoopbackPort() ?? 0,
                 contextTokens: Preferences.contextTokens
             )
-            return .init(port: config.port, arguments: config.arguments)
+            return .init(port: config.port, pidFile: Paths.llamaPIDFile(role: "embeddings", appPort: Preferences.port),
+                         arguments: config.arguments, contextTokens: config.contextTokens)
         }
 
         let textStores = Dictionary(uniqueKeysWithValues: TextModel.allCases.map {
@@ -42,11 +45,15 @@ final class AppModel {
             let config = TextServerConfig(
                 modelPath: model.path,
                 alias: Preferences.textModel.descriptor.name,
-                host: Preferences.listenHost,
-                port: Preferences.textModelPort,
+                host: "127.0.0.1",
+                port: HostInfo.freeLoopbackPort() ?? 0,
                 contextTokens: Preferences.textContextTokens
             )
-            return .init(port: config.port, arguments: config.arguments)
+            return .init(port: config.port, pidFile: Paths.llamaPIDFile(role: "text", appPort: Preferences.port),
+                         arguments: config.arguments, contextTokens: config.contextTokens)
+        }
+        api = APIService(ocr: ocr) { [weak self] in
+            await MainActor.run { self?.upstreams ?? .init(embeddingsPort: nil, text: nil) }
         }
 
         modelStore.onInstalled = { [weak self] in self?.embeddings.restart() }
@@ -60,6 +67,18 @@ final class AppModel {
 
     var textModelStore: ModelStore { textModelStores[textModel]! }
 
+    /// Where requests go now, as applied: a text model turned on in Settings
+    /// but not yet applied is not served.
+    private var upstreams: APIRouter.Upstreams {
+        let descriptor = textModel.descriptor
+        return .init(
+            embeddingsPort: embeddings.listeningPort,
+            embeddingsContext: embeddings.contextTokens ?? Preferences.contextTokens,
+            text: textEnabled ? .init(model: descriptor.name, title: descriptor.title, port: text.listeningPort,
+                                      contextTokens: text.contextTokens ?? Preferences.textContextTokens) : nil
+        )
+    }
+
     func start() {
         activity = ProcessInfo.processInfo.beginActivity(
             options: [.userInitiatedAllowingIdleSystemSleep, .suddenTerminationDisabled],
@@ -71,9 +90,11 @@ final class AppModel {
         if textEnabled {
             text.start()
         }
+        api.start()
     }
 
     func shutDown() {
+        api.stop()
         embeddings.stopAndWait()
         text.stopAndWait()
         ocr.stopNow()
@@ -83,6 +104,7 @@ final class AppModel {
         refreshAddress()
         textEnabled = Preferences.textModelEnabled
         textModel = Preferences.textModel
+        api.restart()
         ocr.restart()
         embeddings.restart()
         if textEnabled {
@@ -97,7 +119,7 @@ final class AppModel {
     }
 
     var hasProblem: Bool {
-        embeddings.status.isProblem || ocr.status.isProblem || (textEnabled && text.status.isProblem)
+        api.status.isProblem || embeddings.status.isProblem || ocr.status.isProblem || (textEnabled && text.status.isProblem)
     }
 
     /// The host Lemmary should be given: this Mac's LAN address, or loopback
@@ -106,7 +128,7 @@ final class AppModel {
         Preferences.allowRemote ? (lanAddress ?? "127.0.0.1") : "127.0.0.1"
     }
 
-    var embeddingsURL: String { "http://\(advertisedHost):\(Preferences.embeddingsPort)/v1" }
-    var ocrURL: String { "http://\(advertisedHost):\(Preferences.ocrPort)" }
-    var textURL: String { "http://\(advertisedHost):\(Preferences.textModelPort)/v1" }
+    /// The base URL of the one `openai` provider Lemmary needs. A `docling`
+    /// provider takes the same without `/v1`.
+    var apiURL: String { "http://\(advertisedHost):\(Preferences.port)/v1" }
 }

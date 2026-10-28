@@ -4,11 +4,10 @@ import Foundation
 enum Paths {
     static let appSupport = URL.applicationSupportDirectory.appending(path: "LemmaryLocalAI", directoryHint: .isDirectory)
     static let models = appSupport.appending(path: "models", directoryHint: .isDirectory)
-    /// One per port, because that is what a leftover server is in the way of,
-    /// and so a development copy on other ports leaves the installed app's
-    /// servers alone.
-    static func llamaPIDFile(port: Int) -> URL {
-        appSupport.appending(path: "llama-server-\(port).pid")
+    /// One per server and app port: keyed by the app's port so a development
+    /// copy on another port leaves the installed app's servers alone.
+    static func llamaPIDFile(role: String, appPort: Int) -> URL {
+        appSupport.appending(path: "llama-server-\(appPort)-\(role).pid")
     }
     static let logs = URL.libraryDirectory.appending(path: "Logs/LemmaryLocalAI", directoryHint: .isDirectory)
     static let llamaLog = logs.appending(path: "llama-server.log")
@@ -75,6 +74,26 @@ enum HostInfo {
         return result == 0 ? Int64(info.ri_resident_size) : nil
     }
 
+    /// A port nothing on loopback is using now, for a llama-server only the app
+    /// talks to. Another process could take it before llama-server binds it;
+    /// that start then fails, and the restart picks another.
+    static func freeLoopbackPort() -> Int? {
+        let fd = socket(AF_INET, SOCK_STREAM, 0)
+        guard fd >= 0 else { return nil }
+        defer { close(fd) }
+        var address = sockaddr_in()
+        address.sin_len = UInt8(MemoryLayout<sockaddr_in>.size)
+        address.sin_family = sa_family_t(AF_INET)
+        address.sin_addr.s_addr = inet_addr("127.0.0.1")
+        var length = socklen_t(MemoryLayout<sockaddr_in>.size)
+        let bound = withUnsafeMutablePointer(to: &address) {
+            $0.withMemoryRebound(to: sockaddr.self, capacity: 1) {
+                bind(fd, $0, length) == 0 && getsockname(fd, $0, &length) == 0
+            }
+        }
+        return bound ? Int(UInt16(bigEndian: address.sin_port)) : nil
+    }
+
     static func executablePath(of pid: pid_t) -> String? {
         var buffer = [CChar](repeating: 0, count: Int(MAXPATHLEN) * 4)
         guard proc_pidpath(pid, &buffer, UInt32(buffer.count)) > 0 else { return nil }
@@ -83,9 +102,9 @@ enum HostInfo {
 }
 
 /// A llama-server left behind by a previous run that did not shut down cleanly
-/// (a crash, a force quit) still holds the port, and the new one would fail to
-/// bind and restart forever. The pid file says which process that would be;
-/// it is only killed if it really is one of ours.
+/// (a crash, a force quit) still holds its model in memory, up to 19 GB, beside
+/// the new one. The pid file says which process that would be; it is only
+/// killed if it really is one of ours.
 enum StaleProcess {
     static func reap(pidFile: URL) {
         defer { try? FileManager.default.removeItem(at: pidFile) }

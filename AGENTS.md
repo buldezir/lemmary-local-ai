@@ -1,18 +1,21 @@
 # Lemmary Local AI
 
-A macOS menu bar app that serves Lemmary's two local AI endpoints from an Apple
-Silicon Mac: bge-m3 embeddings through a bundled `llama-server`, and OCR through
-Apple Vision behind a docling-serve-compatible API. It replaces the LaunchAgent
-setup in Lemmary's `docs/local_ai_macos.md` and must stay a drop-in for it:
-same ports, same model name, same response shapes. A third service, off by
-default, serves a small text model through a second `llama-server` for
-Lemmary's metadata extraction, reached with Lemmary's OpenAI provider type.
+A macOS menu bar app that serves Lemmary's local AI from an Apple Silicon Mac,
+all on one port so Lemmary needs one provider of its OpenAI type: bge-m3
+embeddings through a bundled `llama-server`, OCR through Apple Vision as an
+OpenAI chat model (`apple-vision-ocr`) and behind a docling-serve-compatible
+API, and, off by default, a small text model through a second `llama-server`
+for Lemmary's metadata extraction. It replaces the LaunchAgent setup in
+Lemmary's `docs/local_ai_macos.md`: same embeddings port (8080) and model name,
+same response shapes, so Lemmary's `local` and `docling` provider types still
+work against it.
 
 ## Layout
 
 - `Sources/LocalAIKit/`: everything decided without a window, Vision or a
   model, and the half with tests. `HTTP/` (a small HTTP/1.1 server on
-  Network.framework, the request parser, multipart), `Docling/` (the
+  Network.framework, the request parser, multipart), `API/` (the one port's
+  router, OCR as a chat model, the proxy to the llama-servers), `Docling/` (the
   docling-compatible endpoint and media types), `Layout/` (Vision's page layout
   reduced to plain structs, and the markdown renderer), `Worker/` (the worker
   protocol, `PersistentWorker`, `WorkerPool`), `Llama/` (both llama-server
@@ -20,9 +23,9 @@ Lemmary's metadata extraction, reached with Lemmary's OpenAI provider type.
 - `Sources/VisionOCR/`: Vision and page rendering. Only the worker links it.
 - `Sources/OCRWorker/`: `ocr-worker serve`, the long-lived worker the app
   pools, and `ocr-worker convert <file> <kind>` for trying a file by hand.
-- `Sources/LemmaryLocalAI/`: the SwiftUI app. `LlamaService` supervises one
-  llama-server (there are two: embeddings and the text model), `OCRService`
-  runs the HTTP server and the worker pool, `ModelStore` downloads one model,
+- `Sources/LemmaryLocalAI/`: the SwiftUI app. `APIService` runs the one port,
+  `LlamaService` supervises one llama-server (there are two: embeddings and the
+  text model), `OCRService` the worker pool, `ModelStore` downloads one model,
   `UI/` the popover and Settings.
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
@@ -37,15 +40,18 @@ Lemmary's metadata extraction, reached with Lemmary's OpenAI provider type.
 ## Architecture
 
 ```
-Lemmary ──POST /v1/convert/file──> HTTPServer (in the app)
-                                     │ DoclingEndpoint: multipart, media type, temp file
-                                     ▼
-                                   PoolConverter ── checkout ──> WorkerPool
-                                                                  │ N × `ocr-worker serve`
-                                     request line on stdin ──────>│ Vision, one page at a time
-                                     progress/result lines <──────│
-Lemmary ──POST /v1/embeddings────> llama-server (child process, restarted with backoff)
-Lemmary ──POST /v1/chat/completions> llama-server with the text model (optional, same supervision)
+Lemmary ──:8080──> HTTPServer (in the app) ── APIRouter
+                     │
+                     ├ GET /v1/models: bge-m3, apple-vision-ocr, the text model
+                     ├ POST /v1/chat/completions, model apple-vision-ocr ─┐ OCRChatEndpoint: data URL parts
+                     ├ POST /v1/convert/file ─────────────────────────────┤ DoclingEndpoint: multipart
+                     │                                                    ▼ media type, temp file
+                     │              PoolConverter ── checkout ──> WorkerPool
+                     │                                             │ N × `ocr-worker serve`
+                     │                request line on stdin ──────>│ Vision, one page at a time
+                     │                progress/result lines <──────│
+                     ├ POST /v1/embeddings ─────── UpstreamProxy ──> llama-server on 127.0.0.1:<free port>
+                     └ POST /v1/chat/completions, any other model ─> llama-server with the text model (optional)
 ```
 
 ## Constraints agents should not re-break
@@ -77,7 +83,21 @@ Lemmary ──POST /v1/chat/completions> llama-server with the text model (optio
 - **A document-level failure is HTTP 200 with `status: failure` and an
   `errors` entry**, as docling answers it. Lemmary reads `errors` when
   `md_content` is empty, which is how "the PDF is password-protected" reaches
-  the user. Worker stalls are 504, crashes 500.
+  the user. Worker stalls are 504, crashes 500. The OCR chat model answers the
+  same failure with 422 and OpenAI's error shape, never 400: Lemmary takes a
+  400 that mentions a file as a model refusing PDFs and sends the pages again
+  as images.
+- **One port, and the llama-servers on loopback.** Lemmary's OpenAI provider
+  type is the only one that serves embeddings, OCR and chat, so everything is
+  reachable through it at one base URL; OCR is a chat model because that is
+  how the type reads a document (`internal/ocr/llm.go`). `/v1/models` says
+  what each model is for, as `purposes` in Lemmary's own words
+  (`aiprovider.ModelPurpose`: `llm`, `ocr`, `embedding`) and as Mistral's
+  `capabilities` object, which Lemmary already parses. Until Lemmary reads them
+  for its OpenAI type it guesses: a model is offered for embeddings only if its
+  id or name contains "embed", hence bge-m3's name. The llama-servers listen on free loopback ports chosen at each
+  start, and only the router talks to them. Its proxy buffers: a streamed
+  completion arrives whole.
 - **Every HTTP response closes its connection** and request bodies need a
   `Content-Length`; chunked uploads get 411. Lemmary's Go client, curl -F and
   Python requests all send a length. `Expect: 100-continue` is answered, or
@@ -92,10 +112,10 @@ Lemmary ──POST /v1/chat/completions> llama-server with the text model (optio
   that, because a different build's vectors would mean re-embedding Lemmary's
   archive.
 - **A llama-server left by a crashed app is reaped** on the next start through
-  `llama-server-<port>.pid` in Application Support, and only if its path is
-  inside a `LemmaryLocalAI` bundle. Otherwise it holds the port and the new one
-  restart-loops. Per port, so a development copy on other ports never reaps
-  the installed app's servers.
+  `llama-server-<port>-<role>.pid` in Application Support, and only if its path
+  is inside a `LemmaryLocalAI` bundle. Otherwise it keeps its model in memory,
+  up to 19 GB, beside the new one. Keyed by the app's port, so a development
+  copy on another port never reaps the installed app's servers.
 - **The text model runs with thinking off and no prompt cache in RAM**
   (`TextServerConfig`). Both models think unless the request says otherwise,
   and Lemmary's does not: Gemma 4 E4B went from about 10 s to 30 to 60 s a
@@ -116,9 +136,11 @@ Lemmary ──POST /v1/chat/completions> llama-server with the text model (optio
 - **Writes to a worker's stdin use `F_SETNOSIGPIPE`.** A worker can die between
   the check and the write; without it the app would die of SIGPIPE.
 - **One copy at a time.** A second instance hands over to the first and quits;
-  two would fight for the ports. A build running from `.build` is exempt, for
-  testing beside the installed app on other ports; it shares the installed
-  app's settings, so give it settings on the command line only.
+  two would fight for the port. A build running from `.build` is exempt, for
+  testing beside the installed app on another port; it shares the installed
+  app's settings, so give it settings on the command line only, and do not
+  open its Settings window: the port field writes its value back when the
+  window closes.
 - **The ad-hoc signature in `bundle.sh` is not decoration.** Nested code is
   signed inside out (dylibs, helpers, Sparkle's helpers, then the app).
   `IDENTITY` switches to a Developer ID with the hardened runtime, which
@@ -136,13 +158,19 @@ Lemmary ──POST /v1/chat/completions> llama-server with the text model (optio
 
 ```bash
 swift test                              # LocalAIKit with real processes and sockets; VisionOCR with Vision
-Scripts/dev.sh --run -EmbeddingsPort 18080 -OCRPort 15001 -TextModelPort 18081 \
-  -ModelPath ~/ai/models/bge-m3-f16.gguf -TextModelEnabled YES
-curl -s localhost:15001/ready           # 503 while workers warm up, then 200
-curl -s -F to_formats=md -F 'files=@some.pdf;type=application/pdf' localhost:15001/v1/convert/file
+Scripts/dev.sh --run -Port 18080 -ModelPath ~/ai/models/bge-m3-f16.gguf -TextModelEnabled YES
+curl -s localhost:18080/ready           # 503 while OCR workers warm up, then 200
+curl -s localhost:18080/v1/models
+curl -s -F to_formats=md -F 'files=@some.pdf;type=application/pdf' localhost:18080/v1/convert/file
+curl -s localhost:18080/v1/chat/completions -H 'Content-Type: application/json' -d "{\"model\":\"apple-vision-ocr\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"file\",\"file\":{\"file_data\":\"data:application/pdf;base64,$(base64 -i some.pdf)\"}}]}]}"
 curl -s localhost:18080/v1/embeddings -H 'Content-Type: application/json' -d '{"model":"BAAI/bge-m3","input":["test"]}'
-curl -s localhost:18081/v1/chat/completions -H 'Content-Type: application/json' -d '{"messages":[{"role":"user","content":"Say hi"}]}'
+curl -s localhost:18080/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"gemma-4-e4b","messages":[{"role":"user","content":"Say hi"}]}'
 ```
+
+Lemmary's own clients are the real test: with its repository checked out, a
+small Go program under `backend/cmd/` can call `aiprovider.ListModels`,
+`ai.NewEmbedder`, `ocr.NewFromAIProvider` and `ai.NewExtractor` against
+`http://127.0.0.1:18080/v1` (and `ocr.NewDoclingProvider` without `/v1`).
 
 `-TextModelPath-gemma-4-e4b <file>` points the text model at a GGUF already on
 disk instead of the download.
@@ -170,7 +198,7 @@ document of the same kind has gone through.
 
 `docs/*.png` in the README are window captures (`screencapture -l <window id>`)
 of a copy run from outside `.build`, so Settings has no development caption,
-with `-AppleLocale en_US`, on the default ports and with the models in
+with `-AppleLocale en_US`, on the default port and with the models in
 Application Support, after one request to each service so the panel shows real
 figures. Settings is cut to whole sections, without the footer and its version.
 
