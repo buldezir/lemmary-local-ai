@@ -129,18 +129,57 @@ public struct ModelDescriptor: Sendable, Equatable {
     }
 }
 
-/// The text models on offer, both 4-bit (Q4_K_M), both tried on Lemmary's own
-/// extraction prompt in German and Russian on a 16 GB Mac mini M4 beside the
-/// embeddings and OCR. The URLs are pinned to a repository commit, so a
-/// re-upload cannot turn every download into a checksum failure.
+/// The text models on offer, all 4-bit, all tried on Lemmary's own extraction
+/// prompt in German and Russian beside the embeddings and OCR: the first two on
+/// a 16 GB Mac mini M4, all five on a 32 GB Mac mini M6. Times and memory below
+/// are the M6's. The URLs are pinned to a repository commit, so a re-upload
+/// cannot turn every download into a checksum failure.
 public enum TextModel: String, CaseIterable, Sendable {
-    /// 9 to 25 s a document and 5.4 GB. Every summary in the document's own
-    /// language and only listed tags, but bare titles on invoices.
+    /// 7 to 18 s a document and 5.7 GB. Every field Lemmary asks for, but now
+    /// and then a Russian document's summary in German.
     case gemma4E4B = "gemma-4-e4b"
-    /// 10 to 45 s a document and 6.3 GB. The most useful titles and summaries,
-    /// but it sometimes leaves out `suggested_tags` and `references`, and once
-    /// wrote a document type half in Cyrillic ("Дokumentation").
+    /// 8 to 32 s a document and 6.9 GB. The most useful titles and summaries of
+    /// the small two, but it sometimes leaves out `suggested_tags` and
+    /// `references`, and once wrote a document type half in Cyrillic
+    /// ("Дokumentation"). Under load a long document ran past Lemmary's 90 s.
     case ornith9B = "ornith-1.5-9b"
+    /// 13 to 49 s a document and 9.3 GB. Every summary in the document's own
+    /// language, but dense and slow: 86 s on a long document under load.
+    case gemma4_12B = "gemma-4-12b"
+    /// 5 to 19 s a document and 16.2 GB, a mixture of experts with about 4B
+    /// active. The fastest tried and the only one with no account or customer
+    /// numbers among its references.
+    case gemma4_26B = "gemma-4-26b-a4b"
+    /// 6 to 22 s a document and up to 18.7 GB, a mixture of experts with 3B
+    /// active. The most detailed summaries and the best match to existing
+    /// correspondents, but it often lists account and customer numbers as
+    /// references.
+    case qwen36_35B = "qwen3.6-35b-a3b"
+
+    /// The memory, in GB, a Mac needs before Settings offers the model: what the
+    /// model took, plus the embeddings and OCR (about 2.3 GB) and macOS (about
+    /// 5 GB). The small two are offered on every Mac.
+    public var minimumMemoryGB: Int {
+        switch self {
+        case .gemma4E4B, .ornith9B: 0
+        case .gemma4_12B, .gemma4_26B: 24
+        case .qwen36_35B: 32
+        }
+    }
+
+    /// The models a Mac with `physicalMemory` bytes is offered, in Settings'
+    /// order.
+    public static func offered(physicalMemory: UInt64) -> [TextModel] {
+        allCases.filter { physicalMemory >= UInt64($0.minimumMemoryGB) << 30 }
+    }
+
+    /// The stored choice, or the default when it is unknown or needs more
+    /// memory than this Mac has, as a setting carried over from a bigger Mac would.
+    public static func resolve(_ rawValue: String?, physicalMemory: UInt64) -> TextModel {
+        guard let model = rawValue.flatMap(TextModel.init(rawValue:)),
+              offered(physicalMemory: physicalMemory).contains(model) else { return .gemma4E4B }
+        return model
+    }
 
     public var descriptor: ModelDescriptor {
         switch self {
@@ -161,6 +200,37 @@ public enum TextModel: String, CaseIterable, Sendable {
                 url: URL(string: "https://huggingface.co/ornith-ai/Ornith-1.5-9B-GGUF/resolve/abdd624b12ebf020b767fff532ff44fe552b28c3/Ornith-1.5-9B-Q4_K_M.gguf")!,
                 sha256: "70c112196e0b7023803c9762752e46d29e612a92c83f995bc3ba1ceb07e8fab6",
                 size: 5_780_090_816
+            )
+        // Google's quantization-aware checkpoints: trained for 4-bit, and smaller
+        // than the plain Q4_K_M files.
+        case .gemma4_12B:
+            ModelDescriptor(
+                name: rawValue,
+                title: "Gemma 4 12B",
+                fileName: "gemma-4-12B-it-qat-UD-Q4_K_XL.gguf",
+                url: URL(string: "https://huggingface.co/unsloth/gemma-4-12B-it-qat-GGUF/resolve/980b060c40a8539ac159e0501a3e0f66a6365af3/gemma-4-12B-it-qat-UD-Q4_K_XL.gguf")!,
+                sha256: "90fd44e29e0d7cffeb0fd00dc73cfdab9ed0b0e95306ecf7821ea634c940c370",
+                size: 6_716_356_800
+            )
+        case .gemma4_26B:
+            ModelDescriptor(
+                name: rawValue,
+                title: "Gemma 4 26B-A4B",
+                fileName: "gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf",
+                url: URL(string: "https://huggingface.co/unsloth/gemma-4-26B-A4B-it-qat-GGUF/resolve/7b92b5b28818151e8669af2e45e88d6086f490dd/gemma-4-26B-A4B-it-qat-UD-Q4_K_XL.gguf")!,
+                sha256: "a7c5bc715f5ff8e99a3e8901ce7d2b42b402c669bf24f7c5250747633d0f5891",
+                size: 14_249_047_104
+            )
+        // IQ4_XS rather than Q4_K_M, which at 22 GB would not leave a 32 GB Mac
+        // enough room.
+        case .qwen36_35B:
+            ModelDescriptor(
+                name: rawValue,
+                title: "Qwen3.6 35B-A3B",
+                fileName: "Qwen3.6-35B-A3B-UD-IQ4_XS.gguf",
+                url: URL(string: "https://huggingface.co/unsloth/Qwen3.6-35B-A3B-GGUF/resolve/a483e9e6cbd595906af30beda3187c2663a1118c/Qwen3.6-35B-A3B-UD-IQ4_XS.gguf")!,
+                sha256: "649d7508507b84638732c4f52c24c8b15843c6dca2f3ff793ae07c14a67ebbb3",
+                size: 17_730_509_792
             )
         }
     }

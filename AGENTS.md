@@ -109,7 +109,10 @@ Lemmary ──POST /v1/chat/completions> llama-server with the text model (optio
 - **Text model downloads are pinned to a repository commit** (`TextModel`), so
   a re-upload on Hugging Face cannot turn every download into a checksum
   failure. Changing a model means re-running Lemmary's extraction on German and
-  Russian documents; the README has what the current two did.
+  Russian documents; the README has what the current five did. Settings offers
+  the larger ones by the Mac's memory (`TextModel.minimumMemoryGB`: 24 GB for
+  Gemma 4 12B and 26B-A4B, 32 GB for Qwen3.6 35B-A3B), sized from what each
+  took beside the embeddings and OCR plus about 5 GB for macOS.
 - **Writes to a worker's stdin use `F_SETNOSIGPIPE`.** A worker can die between
   the check and the write; without it the app would die of SIGPIPE.
 - **One copy at a time.** A second instance hands over to the first and quits;
@@ -162,6 +165,14 @@ document of the same kind has gone through.
   Reading their text layer would be faster and exact.
 - **Launch-at-login as a LaunchAgent** (`SMAppService.agent`) for restart after
   a crash. Today a crashed app stays down until the next login.
+
+## Screenshots
+
+`docs/*.png` in the README are window captures (`screencapture -l <window id>`)
+of a copy run from outside `.build`, so Settings has no development caption,
+with `-AppleLocale en_US`, on the default ports and with the models in
+Application Support, after one request to each service so the panel shows real
+figures. Settings is cut to whole sections, without the footer and its version.
 
 ## Icon
 

@@ -59,6 +59,25 @@ private func value(of flag: String, in arguments: [String]) -> String? {
     }
 }
 
+@Test func largerTextModelsNeedMoreMemory() {
+    let gb: (UInt64) -> UInt64 = { $0 << 30 }
+    #expect(TextModel.offered(physicalMemory: gb(8)) == [.gemma4E4B, .ornith9B])
+    #expect(TextModel.offered(physicalMemory: gb(16)) == [.gemma4E4B, .ornith9B])
+    #expect(TextModel.offered(physicalMemory: gb(18)) == [.gemma4E4B, .ornith9B])
+    #expect(TextModel.offered(physicalMemory: gb(24)) == [.gemma4E4B, .ornith9B, .gemma4_12B, .gemma4_26B])
+    #expect(TextModel.offered(physicalMemory: gb(32)) == TextModel.allCases)
+    #expect(TextModel.offered(physicalMemory: gb(64)) == TextModel.allCases)
+}
+
+@Test func aTextModelThisMacIsNotOfferedFallsBackToTheDefault() {
+    #expect(TextModel.resolve("qwen3.6-35b-a3b", physicalMemory: 24 << 30) == .gemma4E4B)
+    #expect(TextModel.resolve("gemma-4-26b-a4b", physicalMemory: 16 << 30) == .gemma4E4B)
+    #expect(TextModel.resolve("gemma-4-26b-a4b", physicalMemory: 24 << 30) == .gemma4_26B)
+    #expect(TextModel.resolve("ornith-1.5-9b", physicalMemory: 8 << 30) == .ornith9B)
+    #expect(TextModel.resolve("no-such-model", physicalMemory: 32 << 30) == .gemma4E4B)
+    #expect(TextModel.resolve(nil, physicalMemory: 32 << 30) == .gemma4E4B)
+}
+
 // MARK: - backoff
 
 @Test func backoffDoublesUpToAMinuteAndResets() {

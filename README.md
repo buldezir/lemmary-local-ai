@@ -6,10 +6,12 @@ Lemmary's metadata extraction. It replaces the hand-built setup in Lemmary's
 `docs/local_ai_macos.md`: three LaunchAgents, Homebrew's llama.cpp, a 2 GB
 Python environment for docling-serve, an ocrmac patch and a watchdog script.
 
+![The menu bar panel: embeddings, OCR and the text model, each with the URL to give Lemmary](docs/menu-bar.png)
+
 | | Embeddings | OCR | Text model (optional) |
 |---|---|---|---|
 | Engine | `llama-server` (llama.cpp, Metal), bundled | Apple Vision `RecognizeDocumentsRequest` | a second `llama-server` |
-| Model | `BAAI/bge-m3`, F16 GGUF, downloaded and checksummed on first run | built into macOS | Gemma 4 E4B or Ornith 1.5 9B, 4-bit GGUF, downloaded and checksummed when turned on |
+| Model | `BAAI/bge-m3`, F16 GGUF, downloaded and checksummed on first run | built into macOS | one of five 4-bit GGUFs, the larger ones on a Mac with 24 or 32 GB, downloaded and checksummed when turned on |
 | API | OpenAI `/v1/embeddings` | docling-serve's `POST /v1/convert/file` | OpenAI `/v1/chat/completions` |
 | Lemmary SDK | Local Embeddings (`local`) | Local OCR (`docling`) | OpenAI (`openai`) with a base URL |
 | Default URL | `http://<mac>:8080/v1` | `http://<mac>:5001` | `http://<mac>:8081/v1` |
@@ -22,9 +24,10 @@ provider type does.
 
 - Apple Silicon, macOS 26 or newer (Vision's document reader is new in 26).
 - About 1.5 GB of memory for embeddings (mostly the model) and 0.1 to 0.3 GB
-  per OCR worker. The text model adds 5.4 GB (Gemma 4 E4B) or 6.3 GB
-  (Ornith 1.5 9B); with everything on, a 16 GB Mac still had about half its
-  memory free.
+  per OCR worker. The text model adds 5.7 to 18.7 GB, depending on the
+  model; Settings offers the larger ones only on a Mac with 24 or 32 GB. With
+  everything on and Gemma 4 E4B, a 16 GB Mac still had about half its memory
+  free.
 - To build: Xcode 26 or newer.
 
 ## Install
@@ -77,6 +80,8 @@ models; documents already processed keep their text.
 
 ## Settings
 
+![Settings: startup, network, embeddings and OCR](docs/settings.png)
+
 | | Default | |
 |---|---|---|
 | Accept connections from other computers | on | off binds both services to 127.0.0.1 |
@@ -85,7 +90,7 @@ models; documents already processed keep their text.
 | Documents at once | 2 | one warm OCR worker process per document |
 | Give up on a page after | 60 s | a page normally takes 0.1 to 0.3 s |
 | Serve a text model | off | |
-| Text model | Gemma 4 E4B | or Ornith 1.5 9B; see below |
+| Text model | Gemma 4 E4B | or a larger one, by the Mac's memory; see below |
 | Text model port | 8081 | |
 | Text model context | 16,384 tokens | 32,768 costs 0.3 to 0.6 GB more |
 
@@ -106,30 +111,58 @@ Logs are in `~/Library/Logs/LemmaryLocalAI/`: `llama-server.log`,
 ## Text model
 
 Turn on **Serve a text model** in Settings, pick the model, and press **Apply
-and Restart Services**; the menu bar panel then offers the download (5.0 or
-5.8 GB, checked against its SHA-256). In Lemmary, add a provider of type
-**OpenAI** with:
+and Restart Services**; the menu bar panel then offers the download (5.0 to
+17.7 GB, checked against its SHA-256). Settings offers the models by the Mac's
+memory, and a choice carried over from a bigger Mac falls back to Gemma 4 E4B:
+
+| Memory | Models |
+|---|---|
+| any | Gemma 4 E4B (default), Ornith 1.5 9B |
+| 24 GB or more | also Gemma 4 12B and Gemma 4 26B-A4B |
+| 32 GB or more | also Qwen3.6 35B-A3B |
+
+![The text model in Settings: the model with its memory and time a document, and what it does well and badly](docs/settings-text-model.png)
+
+In Lemmary, add a provider of type **OpenAI** with:
 
 - base URL: the one the panel shows, e.g. `http://<mac>:8081/v1`
-- model: the model name the panel shows, `gemma-4-e4b` or `ornith-1.5-9b`
+- model: the model name the panel shows: `gemma-4-e4b`, `ornith-1.5-9b`,
+  `gemma-4-12b`, `gemma-4-26b-a4b` or `qwen3.6-35b-a3b`
 - API key: anything. Lemmary refuses an empty one; this service checks none.
 
 Use it for extraction (title, date, type, correspondent, tags, suggested tags,
 summary) and keep chat and Deep Search on a hosted model: a model this size is
 weak at tool use and long conversations.
 
-Both models were run on Lemmary's own extraction prompt and client, on German
-and Russian documents up to Lemmary's 24 KB limit, on a Mac mini M4 with 16 GB
-next to the embeddings and OCR:
+All five were run on Lemmary's own extraction prompt and client, next to the
+embeddings and OCR, on a Mac mini M6 with 32 GB: 14 German and Russian
+documents (invoices, letters, a lease, a tax assessment, insurance, bank
+statements up to Lemmary's 24 KB limit), then the four longest again while
+embeddings and two OCR streams ran without a pause:
 
-| | Gemma 4 E4B (default) | Ornith 1.5 9B |
-|---|---|---|
-| A document | 9 to 25 s | 10 to 45 s |
-| Memory | 5.4 GB | 6.3 GB |
-| Summaries | always in the document's language | in the document's language, with amounts and dates |
-| Titles | bare on invoices ("Rechnung") | the most useful ("Stromrechnung Stadtwerke Musterstadt Nr. 2024-4711") |
-| Tags | only from the list | once a tag not on the list |
-| Fields | every one asked for | sometimes no `suggested_tags` or `references` |
+| | Gemma 4 E4B (default) | Ornith 1.5 9B | Gemma 4 12B | Gemma 4 26B-A4B | Qwen3.6 35B-A3B |
+|---|---|---|---|---|---|
+| File | Q4_K_M, 5.0 GB | Q4_K_M, 5.8 GB | QAT Q4_K_XL, 6.7 GB | QAT Q4_K_XL, 14.2 GB | IQ4_XS, 17.7 GB |
+| A document | 7 to 18 s | 8 to 32 s | 13 to 49 s | 5 to 19 s | 6 to 22 s |
+| Slowest under load | 36 s | over 90 s | 86 s | 40 s | 56 s |
+| Memory | 5.7 GB | 6.9 GB | 9.3 GB | 16.2 GB | up to 18.7 GB |
+| Summaries in the document's language | 12 of 14 | 13 of 14 | 14 of 14 | 14 of 14 | 13 of 14 |
+| References | as asked | one missed, one customer number | one tax number | as asked | account and customer numbers in 7 documents |
+| Fields | every one asked for | 4 documents without `suggested_tags` or `references` | every one | every one | every one |
+
+Gemma 4 26B-A4B and Qwen3.6 35B-A3B are mixtures of experts, which read 3 to
+4B of their weights per token: that is why they are faster than the 12B. Qwen
+gave the most detailed summaries and matched existing correspondents best;
+Gemma 4 26B-A4B is the one to pick where it fits. On a 24 GB Mac it leaves
+little memory for anything else: macOS took about 5 GB, the embeddings and OCR
+2.3. Every model now and then translated the archive's German tags on a
+Russian document or mixed scripts in a word ("Кontoauszug"), and Lemmary drops
+a tag that is not in the archive.
+
+On a Mac mini M4 with 16 GB, earlier, Gemma 4 E4B took 9 to 25 s a document
+and 5.4 GB, Ornith 1.5 9B 10 to 45 s and 6.3 GB; there Ornith wrote the most
+useful titles ("Stromrechnung Stadtwerke Musterstadt Nr. 2024-4711") and E4B
+bare ones on invoices ("Rechnung").
 
 Qwen3.5 4B and 9B and Granite 4.2 8B were tried too and did worse: summaries
 in the wrong language, made-up tags, and Granite took up to a minute and 9 GB.

@@ -68,12 +68,17 @@ struct SettingsView: View {
             Section("Text model") {
                 Toggle("Serve a text model", isOn: $textModelEnabled)
                 caption("For Lemmary's metadata extraction: title, date, tags and summary. In Lemmary, add an OpenAI provider with this service's URL, its model name and any API key, and use it for extraction only.")
-                Picker("Model", selection: $textModel) {
-                    Text("Gemma 4 E4B: 5.4 GB, 9 to 25 s a document").tag(TextModel.gemma4E4B.rawValue)
-                    Text("Ornith 1.5 9B: 6.3 GB, 10 to 45 s a document").tag(TextModel.ornith9B.rawValue)
+                Picker("Model", selection: Binding(
+                    get: { selectedTextModel.rawValue },
+                    set: { textModel = $0 }
+                )) {
+                    ForEach(offeredTextModels, id: \.self) { model in
+                        Text(model.pickerLabel).tag(model.rawValue)
+                    }
                 }
-                caption("Gemma is faster and fills in every field Lemmary asks for. Ornith writes better titles and summaries but sometimes leaves out suggested tags and reference numbers, and now and then mixes scripts in a name.")
-                modelFile(app.textModelStores[TextModel(rawValue: textModel) ?? .gemma4E4B]!)
+                caption(selectedTextModel.note)
+                caption(textModelsCaption)
+                modelFile(app.textModelStores[selectedTextModel]!)
                 Picker("Context", selection: $textContextTokens) {
                     Text("16,384 tokens").tag(16384)
                     Text("32,768 tokens (0.3 to 0.6 GB more)").tag(32768)
@@ -98,6 +103,27 @@ struct SettingsView: View {
         // `windowResizability` does not change that.
         .windowResizeBehavior(.enabled)
         .onAppear { launchAtLogin = Preferences.launchAtLogin }
+    }
+
+    /// The larger models only on a Mac with the memory for them.
+    private var offeredTextModels: [TextModel] {
+        TextModel.offered(physicalMemory: Preferences.physicalMemory)
+    }
+
+    private var selectedTextModel: TextModel {
+        TextModel.resolve(textModel, physicalMemory: Preferences.physicalMemory)
+    }
+
+    /// Says where the numbers come from, and which models are missing and why,
+    /// so a shorter list does not look like a bug.
+    private var textModelsCaption: String {
+        var text = "Memory and times from a Mac mini M6, beside the embeddings and OCR; older chips take longer."
+        let unoffered = TextModel.allCases.filter { !offeredTextModels.contains($0) }
+        if !unoffered.isEmpty {
+            let needs = unoffered.map { "\($0.descriptor.title) (\($0.minimumMemoryGB) GB)" }.joined(separator: ", ")
+            text += " Needs more memory than this Mac's \(Preferences.physicalMemory >> 30) GB: \(needs)."
+        }
+        return text
     }
 
     @ViewBuilder
@@ -131,6 +157,35 @@ struct SettingsView: View {
         panel.allowedContentTypes = [UTType(filenameExtension: "gguf") ?? .data]
         if panel.runModal() == .OK, let url = panel.url {
             store.useExisting(url)
+        }
+    }
+}
+
+/// What Settings says about each text model, from Lemmary's extraction prompt on
+/// German and Russian documents on a Mac mini M6 (see `TextModel`).
+private extension TextModel {
+    var pickerLabel: String {
+        switch self {
+        case .gemma4E4B: "Gemma 4 E4B: 5.7 GB, 7 to 18 s a document"
+        case .ornith9B: "Ornith 1.5 9B: 6.9 GB, 8 to 32 s a document"
+        case .gemma4_12B: "Gemma 4 12B: 9.3 GB, 13 to 49 s a document"
+        case .gemma4_26B: "Gemma 4 26B-A4B: 16.2 GB, 5 to 19 s a document"
+        case .qwen36_35B: "Qwen3.6 35B-A3B: 18.7 GB, 6 to 22 s a document"
+        }
+    }
+
+    var note: String {
+        switch self {
+        case .gemma4E4B:
+            "Fills in every field Lemmary asks for, but now and then writes a Russian document's summary in German."
+        case .ornith9B:
+            "The most useful titles and summaries of the two small models, but it sometimes leaves out suggested tags and reference numbers, and now and then mixes scripts in a name."
+        case .gemma4_12B:
+            "Every summary in the document's own language, but slow: a long document can take over a minute while OCR and embeddings are busy, close to Lemmary's 90 s limit."
+        case .gemma4_26B:
+            "The fastest and most reliable of the five: every summary in the document's own language, and reference numbers without account or customer numbers. On a 24 GB Mac it leaves little memory for anything else."
+        case .qwen36_35B:
+            "The most detailed summaries and the best match to existing correspondents, but it often lists account and customer numbers among the references."
         }
     }
 }

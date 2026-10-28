@@ -61,12 +61,14 @@ enum Preferences {
     static var parallelConversions: Int { max(1, UserDefaults.standard.integer(forKey: Key.parallelConversions)) }
     static var pageTimeout: TimeInterval { TimeInterval(max(10, UserDefaults.standard.integer(forKey: Key.pageTimeout))) }
 
-    /// Off by default: it costs 5 to 6 GB of memory, and Lemmary can extract
+    /// Off by default: it costs 6 to 19 GB of memory, and Lemmary can extract
     /// metadata with a hosted model instead.
     static var textModelEnabled: Bool { UserDefaults.standard.bool(forKey: Key.textModelEnabled) }
     static var textModel: TextModel {
-        TextModel(rawValue: UserDefaults.standard.string(forKey: Key.textModel) ?? "") ?? .gemma4E4B
+        TextModel.resolve(UserDefaults.standard.string(forKey: Key.textModel), physicalMemory: physicalMemory)
     }
+    /// Decides which text models Settings offers.
+    static var physicalMemory: UInt64 { ProcessInfo.processInfo.physicalMemory }
     static var textContextTokens: Int { max(4096, UserDefaults.standard.integer(forKey: Key.textContextTokens)) }
 
     private static func port(_ key: String) -> Int {
