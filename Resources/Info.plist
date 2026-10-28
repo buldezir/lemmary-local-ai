@@ -6,6 +6,8 @@
 	<string>en</string>
 	<key>CFBundleExecutable</key>
 	<string>LemmaryLocalAI</string>
+	<key>CFBundleIconFile</key>
+	<string>LemmaryLocalAI</string>
 	<key>CFBundleIdentifier</key>
 	<string>eu.buldezir.lemmary-local-ai</string>
 	<key>CFBundleInfoDictionaryVersion</key>

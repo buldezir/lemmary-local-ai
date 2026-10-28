@@ -23,7 +23,8 @@ same ports, same model name, same response shapes.
   `ModelStore` downloads the model, `UI/` the popover and Settings.
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
-  drive it.
+  drive it. `Scripts/appicon.swift` draws `Resources/LemmaryLocalAI.icns`
+  (checked in; run it only to change the design).
 
 ## Architecture
 
@@ -117,4 +118,12 @@ document of the same kind has gone through.
   Reading their text layer would be faster and exact.
 - **Launch-at-login as a LaunchAgent** (`SMAppService.agent`) for restart after
   a crash. Today a crashed app stays down until the next login.
-- **An app icon.**
+
+## Icon
+
+`Scripts/appicon.swift` draws it: Lemmary's cream block "L" on its oxblood
+(the web app's favicon colours) inside viewfinder corners, the same idea as the
+menu bar symbol, `text.viewfinder`. The plate follows Apple's template, an
+824-point squircle on the 1024 canvas. Below 32 px the corners are left out and
+the L drawn larger, because at 16 px they blurred into it. Shadow blur is
+scaled by hand, since Core Graphics does not scale it with the context.
