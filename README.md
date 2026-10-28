@@ -1,6 +1,6 @@
 # Lemmary Local AI
 
-A macOS menu bar app that serves [Lemmary](../lemmary)'s local embeddings and
+A macOS menu bar app that serves [Lemmary](https://github.com/buldezir/lemmary)'s local embeddings and
 local OCR from an Apple Silicon Mac, and optionally a small text model for
 Lemmary's metadata extraction. It replaces the hand-built setup in Lemmary's
 `docs/local_ai_macos.md`: three LaunchAgents, Homebrew's llama.cpp, a 2 GB
