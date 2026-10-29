@@ -262,9 +262,11 @@ jobs:
     permissions:
       contents: write
     steps:
+      # Only the apps': the image build stores a .dockerbuild record too.
       - uses: actions/download-artifact@v8
         with:
           path: dist
+          pattern: LemmaryLocalAI-*
           merge-multiple: true
       - name: Publish
         working-directory: dist
