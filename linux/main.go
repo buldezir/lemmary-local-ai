@@ -1,9 +1,10 @@
 // Command lemmary-local-ai serves Lemmary's local AI from an NVIDIA GPU on
-// Linux, all on one port: bge-m3 embeddings, OCR by a vision model, and
-// optionally a text model for metadata extraction, each in a llama-server of
-// its own on loopback; without a GPU, the embeddings alone, on the CPU. It is
-// the Linux counterpart of the macOS app in this repository and answers the
-// same API, so Lemmary's lemmary_local_ai provider type works against either.
+// Linux, all on one port: bge-m3 embeddings, OCR by LightOnOCR-2 or Indra,
+// and optionally a text model for metadata extraction, each in a llama-server
+// of its own on loopback but Indra, which runs in Python workers on the CPU;
+// without a GPU, the embeddings and Indra alone, on the CPU. It is the Linux
+// counterpart of the macOS app in this repository and answers the same API,
+// so Lemmary's lemmary_local_ai provider type works against either.
 package main
 
 import (
@@ -18,6 +19,7 @@ import (
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"strings"
 	"sync"
@@ -37,21 +39,20 @@ func main() {
 	addr := flag.String("addr", ":5001", "address to serve on; 127.0.0.1:5001 keeps it to this machine")
 	data := flag.String("data", defaultDataDir(), "where models are downloaded and llama-server logs written")
 	llama := flag.String("llama-server", defaultLlamaServer(), "llama-server from llama.cpp's release "+llamaBuild)
-	parallel := flag.Int("ocr-parallel", 2, "pages OCR reads at once, of one document or several")
+	parallel := flag.Int("ocr-parallel", 1, "what OCR reads at once: LightOnOCR's pages, of one document or several, or Indra's documents")
 	pageTimeout := flag.Duration("page-timeout", 2*time.Minute, "give up on a page after this long")
 	textID := flag.String("text-model", "off", "text model for Lemmary's metadata extraction, or off: "+ids(32))
 	textContext := flag.Int("text-context", 16384, "the text model's context in tokens")
 	vramGB := flag.Int("vram-gb", 0, "the GPU's memory in GB, if nvidia-smi cannot tell")
 	flag.Parse()
 
-	// Without a GPU, embeddings alone: OCR by a vision model took minutes a
-	// page on a CPU.
+	// Without a GPU, embeddings and Indra alone: OCR by a vision model took
+	// minutes a page on a CPU.
 	tier, err := vramTier(*vramGB)
 	gpu := err == nil
 	if !gpu && *textID != "off" {
 		log.Fatalf("%v; a text model needs one", err)
 	}
-	ocrModel := lightOnOCR
 	logs := filepath.Join(*data, "logs")
 	if err := os.MkdirAll(logs, 0o755); err != nil {
 		log.Fatal(err)
@@ -59,7 +60,7 @@ func main() {
 	newServer := func(role string) *server {
 		return &server{role: role, exe: *llama, logPath: filepath.Join(logs, role+".log")}
 	}
-	a := &app{embed: newServer("embeddings"), ocrModel: ocrModel,
+	a := &app{embed: newServer("embeddings"),
 		embedContext: embedContext, textContext: *textContext, pageTimeout: *pageTimeout, parallel: *parallel}
 
 	// Each llama-server, its model, and its command line given the model's files.
@@ -77,21 +78,6 @@ func main() {
 				"-c", strconv.Itoa(embedContext), "-b", strconv.Itoa(embedContext), "-ub", strconv.Itoa(embedContext),
 				"-np", "1", "--no-webui"}
 		}},
-	}
-	if gpu {
-		a.ocr = newServer("ocr")
-		services = append(services, service{a.ocr, ocrModel, func(p []string) []string {
-			args := []string{"-m", p[0], "--alias", ocrModel.ID, "-ngl", "99", "-fa", "on",
-				// One slot per page read at once. Two read a four-page document
-				// in 13.4 s instead of 15.5; four were no faster.
-				"-np", strconv.Itoa(*parallel), "-c", strconv.Itoa(ocrSlotContext * *parallel),
-				// Every page is a new image: nothing to gain from keeping prompts.
-				"--cache-ram", "0", "--no-webui"}
-			if len(p) > 1 {
-				args = append(args, "--mmproj", p[1])
-			}
-			return args
-		}})
 	}
 
 	if *textID != "off" {
@@ -121,6 +107,60 @@ func main() {
 	ctx, stop := signal.NotifyContext(context.Background(), syscall.SIGINT, syscall.SIGTERM)
 	defer stop()
 	var wg sync.WaitGroup
+
+	// OCR: LightOnOCR-2 with a GPU, Indra always, one of them in memory at a
+	// time, the one used last. Each downloads at start and is loaded once
+	// its files are in place, if it is the one to load first.
+	indraLog, err := os.OpenFile(filepath.Join(logs, "indra.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0o644)
+	if err != nil {
+		log.Fatal(err)
+	}
+	// Four threads a worker read a page in 0.17 s on 12 cores; more gained little.
+	a.indra = &indraEngine{workers: *parallel, threads: max(1, min(4, runtime.NumCPU() / *parallel)), logw: indraLog}
+	engines, fallback := map[string]ocrEngine{indraOCR.ID: a.indra}, indraOCR.ID
+	var light *llamaOCR
+	if gpu {
+		a.ocr = newServer("ocr")
+		light = &llamaOCR{s: a.ocr}
+		engines[lightOnOCR.ID], fallback = light, lightOnOCR.ID
+	}
+	a.ocrs = newOCRSwitch(ctx, engines, filepath.Join(*data, "ocr-model"), fallback)
+	first := a.ocrs.current()
+	wg.Go(func() {
+		inst, err := installIndra(ctx, *data, indraPython, indraWheels)
+		a.indra.installed(inst, err)
+		if err != nil {
+			if ctx.Err() == nil {
+				log.Printf("%s: %v", indraOCR.ID, err)
+			}
+			return
+		}
+		if first == indraOCR.ID {
+			a.ocrs.preload(indraOCR.ID)
+		}
+	})
+	if gpu {
+		wg.Go(func() {
+			paths, err := fetch(ctx, filepath.Join(*data, "models"), lightOnOCR)
+			if err != nil {
+				if ctx.Err() == nil {
+					log.Fatalf("ocr: %v", err)
+				}
+				return
+			}
+			a.ocr.args = []string{"-m", paths[0], "--mmproj", paths[1], "--alias", lightOnOCR.ID, "-ngl", "99", "-fa", "on",
+				// One slot per page read at once. Two read a four-page document
+				// in 13.4 s instead of 15.5; four were no faster.
+				"-np", strconv.Itoa(*parallel), "-c", strconv.Itoa(ocrSlotContext * *parallel),
+				// Every page is a new image: nothing to gain from keeping prompts.
+				"--cache-ram", "0", "--no-webui"}
+			light.prepared.Store(true)
+			if first == lightOnOCR.ID {
+				a.ocrs.preload(lightOnOCR.ID)
+			}
+		})
+	}
+
 	for _, sv := range services {
 		wg.Go(func() {
 			paths, err := fetch(ctx, filepath.Join(*data, "models"), sv.m)
@@ -141,10 +181,11 @@ func main() {
 			log.Fatal(err)
 		}
 	}()
-	on, ocr, text := fmt.Sprintf("a %d GB GPU", tier), ocrModel.ID, "off"
+	on, ocr, text := fmt.Sprintf("a %d GB GPU", tier), lightOnOCR.ID+" and "+indraOCR.ID+", one in memory at a time", "off"
 	if !gpu {
-		log.Print(err)
-		on, ocr = "the CPU", "off (it needs a GPU)"
+		_, gpuErr := vramTier(*vramGB)
+		log.Print(gpuErr)
+		on, ocr = "the CPU", indraOCR.ID
 	}
 	if a.text != nil {
 		text = a.textModel.ID
@@ -156,6 +197,7 @@ func main() {
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	srv.Shutdown(shutdown)
+	a.ocrs.stop()
 	wg.Wait()
 }
 

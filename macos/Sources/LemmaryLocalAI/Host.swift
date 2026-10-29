@@ -1,9 +1,13 @@
 import Darwin
 import Foundation
+import LocalAIKit
 
 enum Paths {
     static let appSupport = URL.applicationSupportDirectory.appending(path: "LemmaryLocalAI", directoryHint: .isDirectory)
     static let models = appSupport.appending(path: "models", directoryHint: .isDirectory)
+    /// Indra's Python and packages; its models are in `models`.
+    static let indra = appSupport.appending(path: "indra", directoryHint: .isDirectory)
+    static let indraLayout = IndraRuntime.Layout(root: indra, modelsRoot: models)
     /// One per server and app port: keyed by the app's port so a development
     /// copy on another port leaves the installed app's servers alone.
     static func llamaPIDFile(role: String, appPort: Int) -> URL {

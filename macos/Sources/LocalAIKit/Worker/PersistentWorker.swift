@@ -28,7 +28,7 @@ public enum WorkerFailure: Error, Equatable, CustomStringConvertible {
     }
 }
 
-/// One `ocr-worker serve` process, one request at a time.
+/// One worker process, `ocr-worker serve` or Indra's, one request at a time.
 ///
 /// This is the replacement for the old log-scraping watchdog. Apple Vision on
 /// macOS 27 can accept a request and never answer it, with the process sitting
@@ -74,10 +74,13 @@ public final class PersistentWorker: Sendable {
     public var phase: Phase { state.withLock { $0.phase } }
     public var warmUpError: String? { state.withLock { $0.warmUpError } }
 
-    public func start(arguments: [String] = ["serve"]) throws {
+    public func start(arguments: [String] = ["serve"], environment: [String: String]? = nil) throws {
         let process = Process()
         process.executableURL = executable
         process.arguments = arguments
+        if let environment {
+            process.environment = environment
+        }
         process.qualityOfService = .userInitiated
         let input = Pipe()
         let output = Pipe()

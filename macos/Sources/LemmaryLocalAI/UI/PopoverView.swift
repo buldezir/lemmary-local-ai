@@ -38,10 +38,11 @@ struct PopoverView: View {
 
             ServiceRow(
                 title: "OCR",
-                engine: "Apple Vision, docling-compatible",
+                engine: ocrEngine,
                 status: app.ocr.status,
-                detail: modelDetail(OCRChatEndpoint.model, ocrDetail)
+                detail: [ocrModels, ocrDetail].compactMap(\.self).joined(separator: " · ")
             )
+            IndraDownloadView(ocr: app.ocr)
 
             if app.textEnabled {
                 ServiceRow(
@@ -81,6 +82,18 @@ struct PopoverView: View {
     /// Lemmary's OpenAI provider asks for a model name for each job.
     private func modelDetail(_ name: String, _ more: String?) -> String {
         ["Model name \(name)", more].compactMap(\.self).joined(separator: " · ")
+    }
+
+    /// Which of the two models is in memory, the one used last.
+    private var ocrEngine: String {
+        guard let loaded = app.ocr.loaded else { return "docling-compatible" }
+        return "\(loaded.engine) in memory, docling-compatible"
+    }
+
+    /// Lemmary's provider asks for the OCR model by name; either works, and the
+    /// other one starts when asked for.
+    private var ocrModels: String {
+        "Model names " + OCRModel.allCases.map(\.id).joined(separator: ", ")
     }
 
     private var ocrDetail: String? {
@@ -217,6 +230,44 @@ struct ModelSetupView: View {
         panel.allowsMultipleSelection = false
         if panel.runModal() == .OK, let url = panel.url {
             store.useExisting(url)
+        }
+    }
+}
+
+/// Indra's runtime and models while they download, or why they did not.
+struct IndraDownloadView: View {
+    let ocr: OCRService
+
+    var body: some View {
+        switch ocr.indraDownload {
+        case .checking, .installed:
+            EmptyView()
+        case .downloading(let received, let total):
+            VStack(alignment: .leading, spacing: Metrics.tight) {
+                ProgressView(value: Double(received), total: Double(max(total, 1)))
+                Text("Downloading Indra: \(received.formatted(.byteCount(style: .file))) of \(total.formatted(.byteCount(style: .file)))")
+                    .font(Metrics.Text.caption)
+                    .foregroundStyle(.secondary)
+            }
+            .padding(.leading, Metrics.dot + Metrics.tight * 1.5)
+        case .unpacking:
+            HStack(spacing: Metrics.tight) {
+                ProgressView()
+                    .controlSize(.small)
+                Text("Unpacking Indra…")
+                    .font(Metrics.Text.caption)
+            }
+            .padding(.leading, Metrics.dot + Metrics.tight * 1.5)
+        case .failed(let why):
+            VStack(alignment: .leading, spacing: Metrics.tight) {
+                Text("Indra could not be downloaded: \(why)")
+                    .font(Metrics.Text.caption)
+                    .foregroundStyle(.red)
+                    .fixedSize(horizontal: false, vertical: true)
+                Button("Try Again") { ocr.installIndra() }
+                    .controlSize(.small)
+            }
+            .padding(.leading, Metrics.dot + Metrics.tight * 1.5)
         }
     }
 }

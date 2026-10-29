@@ -126,7 +126,7 @@ func fetch(ctx context.Context, dir string, m model) ([]string, error) {
 
 // ponytail: no resume; a cut download starts over.
 func download(ctx context.Context, f file, dst string) error {
-	log.Printf("downloading %s (%.1f GB)", f.URL, float64(f.Size)/1e9)
+	log.Printf("downloading %s (%.1f MB)", f.URL, float64(f.Size)/1e6)
 	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
 		return err
 	}
@@ -134,7 +134,9 @@ func download(ctx context.Context, f file, dst string) error {
 	if err != nil {
 		return err
 	}
-	if token := os.Getenv("HF_TOKEN"); token != "" {
+	// Hugging Face's token for Hugging Face alone: Indra's runtime comes from
+	// GitHub and PyPI.
+	if token := os.Getenv("HF_TOKEN"); token != "" && req.URL.Host == "huggingface.co" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 	resp, err := http.DefaultClient.Do(req)

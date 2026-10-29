@@ -1,13 +1,11 @@
 import Foundation
 
-/// Apple Vision as an OpenAI chat model, the way Lemmary's `openai` provider
+/// The OCR models as OpenAI chat models, the way Lemmary's `openai` provider
 /// type reads a document: a chat completion whose user message carries the
 /// document as a data URL, an `image_url` part for an image or a `file` part
 /// for a PDF, answered with its text as the assistant's message. The prompt is
-/// not read; Vision reads the page whatever it is asked.
+/// not read; either model reads the page whatever it is asked.
 public struct OCRChatEndpoint: Sendable {
-    public static let model = "apple-vision-ocr"
-
     let conversion: UploadConversion
 
     public init(converter: any DocumentConverting, uploadDirectory: URL,
@@ -15,7 +13,7 @@ public struct OCRChatEndpoint: Sendable {
         conversion = UploadConversion(converter: converter, uploadDirectory: uploadDirectory, onConversion: onConversion)
     }
 
-    public func handle(_ request: HTTPRequest) async -> HTTPResponse {
+    public func handle(_ request: HTTPRequest, model: OCRModel) async -> HTTPResponse {
         let attachments: [Attachment]
         do {
             attachments = try Attachment.all(inChatRequest: request.body)
@@ -23,12 +21,13 @@ public struct OCRChatEndpoint: Sendable {
             return .openAIError(.badRequest, "\(error)")
         }
         guard !attachments.isEmpty else {
-            return .openAIError(.badRequest, "\(Self.model) reads documents: send a PDF or an image as a content part of the user message")
+            return .openAIError(.badRequest, "\(model.id) reads documents: send a PDF or an image as a content part of the user message")
         }
 
         var texts: [String] = []
         for attachment in attachments {
-            switch await conversion.run(data: attachment.data, declaredType: attachment.mimeType, filename: attachment.filename) {
+            switch await conversion.run(data: attachment.data, declaredType: attachment.mimeType, filename: attachment.filename,
+                                        model: model) {
             case .converted(let markdown, _, _):
                 texts.append(markdown)
             // 422, not 400: Lemmary takes a 400 that mentions a file as a model
@@ -36,12 +35,12 @@ public struct OCRChatEndpoint: Sendable {
             case .documentFailed(let reason, _):
                 return .openAIError(.unprocessable, reason)
             case .unsupported(let mimeType):
-                return .openAIError(.unsupportedMediaType, "\(Self.model) reads PDFs and images, not \(mimeType)")
+                return .openAIError(.unsupportedMediaType, "\(model.id) reads \(model.readsDescription), not \(mimeType)")
             case .serverError(let status, let message):
                 return .openAIError(status, message, type: "server_error")
             }
         }
-        return .json(ChatCompletion(model: Self.model, content: texts.joined(separator: "\n\n")))
+        return .json(ChatCompletion(model: model.id, content: texts.joined(separator: "\n\n")))
     }
 }
 

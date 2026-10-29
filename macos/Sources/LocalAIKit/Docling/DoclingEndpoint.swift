@@ -1,7 +1,8 @@
 import Foundation
 
 public protocol DocumentConverting: Sendable {
-    func convert(file: URL, kind: MediaKind) async throws -> ConversionOutcome
+    /// `model` nil is whichever model is in memory, or was used last.
+    func convert(file: URL, kind: MediaKind, model: OCRModel?) async throws -> ConversionOutcome
 }
 
 public enum ConversionOutcome: Sendable, Equatable {
@@ -46,14 +47,18 @@ public struct ConversionEvent: Sendable {
 public struct DoclingEndpoint: Sendable {
     public var converter: any DocumentConverting
     public var isReady: @Sendable () async -> Bool
+    /// The model in memory, for `/version`.
+    public var loadedModel: @Sendable () async -> OCRModel?
     public var uploadDirectory: URL
     public var version: String
     public var onConversion: @Sendable (ConversionEvent) -> Void
 
-    public init(converter: any DocumentConverting, isReady: @escaping @Sendable () async -> Bool, uploadDirectory: URL,
+    public init(converter: any DocumentConverting, isReady: @escaping @Sendable () async -> Bool,
+                loadedModel: @escaping @Sendable () async -> OCRModel? = { nil }, uploadDirectory: URL,
                 version: String, onConversion: @escaping @Sendable (ConversionEvent) -> Void = { _ in }) {
         self.converter = converter
         self.isReady = isReady
+        self.loadedModel = loadedModel
         self.uploadDirectory = uploadDirectory
         self.version = version
         self.onConversion = onConversion
@@ -66,7 +71,7 @@ public struct DoclingEndpoint: Sendable {
         case ("GET", "/ready"):
             return await isReady() ? .json(["status": "ok"]) : .json(["status": "starting"], status: .serviceUnavailable)
         case ("GET", "/version"):
-            return .json(["lemmary-local-ai": version, "ocr-engine": "apple-vision"])
+            return .json(["lemmary-local-ai": version, "ocr-engine": await loadedModel()?.id ?? "none"])
         case ("POST", "/v1/convert/file"):
             return await convert(request)
         case ("POST", "/v1/convert/source"), ("POST", "/v1/convert/file/async"), ("POST", "/v1/convert/source/async"):
@@ -96,8 +101,11 @@ public struct DoclingEndpoint: Sendable {
         }
 
         let filename = file.filename ?? "document"
+        // Lemmary sends the OCR model bound to its provider as the engine;
+        // without one, or with one of docling's own, the model in memory reads it.
+        let model = form.fields["ocr_engine"]?.first.flatMap(OCRModel.init(engine:))
         let conversion = UploadConversion(converter: converter, uploadDirectory: uploadDirectory, onConversion: onConversion)
-        switch await conversion.run(data: file.body, declaredType: file.contentType, filename: file.filename) {
+        switch await conversion.run(data: file.body, declaredType: file.contentType, filename: file.filename, model: model) {
         case .converted(let markdown, _, let duration):
             return .json(ConvertDocumentResponse(
                 document: .init(filename: filename, mdContent: markdown),
@@ -106,10 +114,11 @@ public struct DoclingEndpoint: Sendable {
             return .json(ConvertDocumentResponse(
                 document: .init(filename: filename, mdContent: ""),
                 status: "failure",
-                errors: [.init(componentType: "document_backend", moduleName: "apple-vision", errorMessage: reason)],
+                errors: [.init(componentType: "document_backend", moduleName: "lemmary-local-ai", errorMessage: reason)],
                 processingTime: duration))
         case .unsupported(let mimeType):
-            return .detail(.unsupportedMediaType, "unsupported format \(mimeType)")
+            let readers = model.map { " for \($0.id), which reads \($0.readsDescription)" } ?? ""
+            return .detail(.unsupportedMediaType, "unsupported format \(mimeType)\(readers)")
         case .serverError(let status, let message):
             return .detail(status, message)
         }

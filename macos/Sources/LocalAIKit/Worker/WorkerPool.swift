@@ -1,19 +1,26 @@
 import Foundation
 import Synchronization
 
-/// A fixed number of `ocr-worker serve` processes, kept running and warm.
-/// A worker that dies or is killed is replaced; one that fails to start is
-/// retried with backoff, so a broken binary does not spin.
+/// A fixed number of OCR worker processes, `ocr-worker serve` or Indra's,
+/// kept running and warm. A worker that dies or is killed is replaced; one
+/// that fails to start is retried with backoff, so a broken binary does not
+/// spin.
 public actor WorkerPool {
     public struct Configuration: Sendable {
         public var executable: URL
+        public var arguments: [String]
+        /// nil keeps the app's environment.
+        public var environment: [String: String]?
         public var size: Int
         /// The first warm-up after Vision's models were unloaded took up to
         /// 40 seconds in testing; this is far beyond that.
         public var startupTimeout: TimeInterval
 
-        public init(executable: URL, size: Int, startupTimeout: TimeInterval = 300) {
+        public init(executable: URL, arguments: [String] = ["serve"], environment: [String: String]? = nil, size: Int,
+                    startupTimeout: TimeInterval = 300) {
             self.executable = executable
+            self.arguments = arguments
+            self.environment = environment
             self.size = max(1, size)
             self.startupTimeout = startupTimeout
         }
@@ -110,7 +117,7 @@ public actor WorkerPool {
         guard !stopped else { return }
         let worker = PersistentWorker(executable: configuration.executable, onLog: onLog)
         do {
-            try worker.start()
+            try worker.start(arguments: configuration.arguments, environment: configuration.environment)
         } catch {
             onLog("\(error)")
             respawnLater()
@@ -150,7 +157,7 @@ public actor WorkerPool {
 }
 
 /// Converts a document on a pooled worker.
-public struct PoolConverter: DocumentConverting {
+public struct PoolConverter: Sendable {
     public var pool: WorkerPool
     public var stallTimeout: TimeInterval
     public var hardTimeout: TimeInterval

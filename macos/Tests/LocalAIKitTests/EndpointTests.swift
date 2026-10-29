@@ -4,9 +4,11 @@ import Testing
 
 private struct FakeConverter: DocumentConverting {
     var outcome: @Sendable (URL, MediaKind) throws -> ConversionOutcome
+    var models: ModelLog? = nil
 
-    func convert(file: URL, kind: MediaKind) async throws -> ConversionOutcome {
-        try outcome(file, kind)
+    func convert(file: URL, kind: MediaKind, model: OCRModel?) async throws -> ConversionOutcome {
+        models?.append(model)
+        return try outcome(file, kind)
     }
 }
 
@@ -152,4 +154,37 @@ private final class PortBox: @unchecked Sendable {
         }
         throw CancellationError()
     }
+}
+
+// MARK: - the engine Lemmary names
+
+/// Lemmary's convert request with the `ocr_engine` it sends once an admin
+/// binds an OCR model to the provider.
+private func convertRequest(engine: String?) -> HTTPRequest {
+    let boundary = "B0undary"
+    var body = Data()
+    if let engine {
+        body.append(Data("--\(boundary)\r\nContent-Disposition: form-data; name=\"ocr_engine\"\r\n\r\n\(engine)\r\n".utf8))
+    }
+    body.append(lemmaryBody(boundary: boundary, file: Data("%PDF-1.7".utf8)))
+    return HTTPRequest(
+        head: HTTPRequestHead(method: "POST", target: "/v1/convert/file", version: "HTTP/1.1",
+                              headers: HTTPHeaders([("Content-Type", "multipart/form-data; boundary=\(boundary)")])),
+        body: body
+    )
+}
+
+@Test func theOCREngineNamesTheModel() async throws {
+    let models = ModelLog()
+    let endpoint = DoclingEndpoint(
+        converter: FakeConverter(outcome: { _, _ in .converted(markdown: "x", pages: 1) }, models: models),
+        isReady: { true },
+        uploadDirectory: FileManager.default.temporaryDirectory.appending(path: "endpoint-tests"),
+        version: "test"
+    )
+    for engine in ["indra-ocr", "apple-vision-ocr", "ocrmac", "easyocr", nil] {
+        #expect(await endpoint.handle(convertRequest(engine: engine)).status == .ok)
+    }
+    // docling's other engines, and none at all, mean the model in memory.
+    #expect(models.models == [.indra, .appleVision, .appleVision, nil, nil])
 }

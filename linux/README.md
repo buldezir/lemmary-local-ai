@@ -2,11 +2,13 @@
 
 The Linux counterpart of the macOS app, for an NVIDIA GPU: the same API on one
 port, 5001, so Lemmary's **Lemmary Local AI** provider type works against
-either. Embeddings (`BAAI/bge-m3`) and OCR (`lightonocr-2`) always run; a text
-model for metadata extraction runs when chosen. Each is a llama-server from
-llama.cpp's release `b11936` on loopback, started, health-checked and
-restarted by this program; models download on first start and are checked by
-SHA-256. Without a GPU it serves the embeddings alone, on the CPU: see
+either. Embeddings (`BAAI/bge-m3`) always run, and OCR by `lightonocr-2` on
+the GPU or `indra-ocr` on the CPU, one of them in memory at a time; a text
+model for metadata extraction runs when chosen. Each but Indra is a
+llama-server from llama.cpp's release `b11936` on loopback, started,
+health-checked and restarted by this program; Indra runs in Python workers.
+Models, and Indra's Python, download on first start and are checked by
+SHA-256. Without a GPU it serves the embeddings and Indra, on the CPU: see
 [Without a GPU](#without-a-gpu).
 
 ```bash
@@ -17,8 +19,9 @@ curl -s localhost:5001/ready     # 503 while models download and load
 
 In Lemmary, add a provider of type **Lemmary Local AI** with base URL
 `http://<host>:5001/v1`. Its pickers list `BAAI/bge-m3` for embeddings,
-`lightonocr-2` for OCR and the text model for General AI; an OCR model left
-blank also works (the app answers to the Mac's `apple-vision-ocr`).
+`lightonocr-2` and `indra-ocr` for OCR and the text model for General AI; an
+OCR model left blank also works (the app answers to the Mac's
+`apple-vision-ocr` with the OCR model in memory).
 
 ## Settings
 
@@ -31,9 +34,9 @@ Change one by restarting with the new flags.
 | `-text-model` | `off` | serve a text model, and which: one of the [text models](#text-models) the GPU has room for; a larger one is refused at start |
 | `-text-context` | 16384 | the text model's context in tokens |
 | `-addr` | `:5001` | the one port, on every interface; `127.0.0.1:5001` keeps it to this machine |
-| `-ocr-parallel` | 2 | pages OCR reads at once, of one document or several; each takes 0.9 GB of VRAM |
+| `-ocr-parallel` | 1 | what OCR reads at once: LightOnOCR's pages, of one document or several, each taking 0.9 GB of VRAM, or Indra's documents, each a worker of about 0.4 GB of RAM |
 | `-page-timeout` | `2m` | give up on a page after this long |
-| `-data` | `~/.local/share/lemmary-local-ai`, `/data` in the image | where models download and llama-server logs go |
+| `-data` | `~/.local/share/lemmary-local-ai`, `/data` in the image | where models and Indra's runtime download, and logs go |
 | `-vram-gb` | from `nvidia-smi` | the GPU's memory in GB, if `nvidia-smi` cannot tell; with neither, embeddings alone on the CPU |
 | `-llama-server` | beside this program, else on `PATH` | the llama-server to run |
 
@@ -58,8 +61,26 @@ volumes:
 
 ## OCR
 
+Two OCR models, both listed while they can run: `lightonocr-2` with a GPU and
+`indra-ocr` always. Only the one used last is in memory, and the next start
+loads it again (it is kept in `ocr-model` in the data directory); asking for
+the other replaces it once the documents in flight are done. LightOnOCR's
+llama-server takes a few seconds to load, Indra's workers under two.
+
+[Indra OCR](https://github.com/datalab-to/indra) 1.1.2 runs on ONNX Runtime on
+the CPU, four threads a worker, and is given the document itself: a PDF's own
+text layer is read where it passes Indra's checks, and the rest is recognized,
+in about 0.4 s a scanned page on 14 cores of an Intel Core Ultra 5 235HX. Its
+Python (python-build-standalone 3.12), packages and models, about 140 MB, download
+into the data directory at the first start. Images OpenCV cannot read go
+through ImageMagick first; HEIC does not, as for LightOnOCR. Indra's code is
+Apache-2.0; its model weights are Datalab's, under a modified OpenRAIL-M
+licence, downloaded with them: free for personal use, research and
+organisations under $20M in revenue and funding, not for a product competing
+with Datalab's.
+
 LightOnOCR-2 1B reads each page, rendered at 2000 px (`pdftoppm` for PDFs,
-ImageMagick for images), two pages at a time. Of the five OCR models llama.cpp
+ImageMagick for images), as many at a time as `-ocr-parallel`. Of the five OCR models llama.cpp
 serves, run through this app on 22 German, English and Russian documents, born
 digital and as degraded scans, scored against their text layer:
 
@@ -91,14 +112,16 @@ German, Russian and English documents, alone and while OCR and embeddings ran:
 
 Thinking is off and streamed answers pass through as they are generated.
 
-`lemmary-local-ai -h` lists every flag. llama-server logs are in `/data/logs`.
+`lemmary-local-ai -h` lists every flag. llama-server logs are in `/data/logs`,
+and Indra's workers' in `/data/logs/indra.log`.
 
 ## Without a GPU
 
 When `nvidia-smi` finds no GPU, and `-vram-gb` is not given, it serves
-`BAAI/bge-m3` alone, on the CPU: OCR and a text model need a GPU, and
-`-text-model` is refused. LightOnOCR did not finish one invoice page in two
-minutes on a busy 14-core CPU. Leave out `--gpus all`:
+`BAAI/bge-m3` and `indra-ocr`, on the CPU: LightOnOCR and a text model need a
+GPU, and `-text-model` is refused. LightOnOCR did not finish one invoice page
+in two minutes on a busy 14-core CPU; Indra read a scanned page in 0.4 s, and
+the container took about 0.7 GB with both loaded. Leave out `--gpus all`:
 
 ```bash
 docker run -p 5001:5001 -v lemmary-local-ai:/data ghcr.io/buldezir/lemmary-local-ai:latest
@@ -108,8 +131,7 @@ A 6,000-token chunk took 13.5 s on the 14 cores of an Intel Core Ultra 5
 235HX, in 1.7 GB of RAM, so one request of Lemmary's, up to 120,000 characters,
 can come near its 90 s AI timeout (`AI_TIMEOUT_SEC`); raise that on a slower
 CPU. The vectors matched the GPU's at cosine 0.9994 or better, so Lemmary can
-move between the two without re-embedding. Bind OCR in Lemmary to another
-provider.
+move between the two without re-embedding.
 
 ## Without Docker
 

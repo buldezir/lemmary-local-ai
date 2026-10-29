@@ -2,6 +2,7 @@ package main
 
 import (
 	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -67,10 +68,15 @@ func newTestApp(t *testing.T, textOn bool) (*app, *fakeLlama, *httptest.Server) 
 	t.Cleanup(upstream.Close)
 	u, _ := url.Parse(upstream.URL)
 	port, _ := strconv.Atoi(u.Port())
-	a := &app{embed: &server{role: "embeddings"}, ocr: &server{role: "ocr"}, ocrModel: lightOnOCR,
+	a := &app{embed: &server{role: "embeddings"}, ocr: &server{role: "ocr"},
 		embedContext: 8192, textContext: 16384, pageTimeout: 10 * time.Second, parallel: 2}
 	a.embed.port.Store(int32(port))
 	a.ocr.port.Store(int32(port))
+	a.indra = fakeIndra(t)
+	a.ocrs = newOCRSwitch(context.Background(), map[string]ocrEngine{lightOnOCR.ID: &fakeEngine{}, indraOCR.ID: a.indra},
+		t.TempDir()+"/ocr-model", lightOnOCR.ID)
+	a.ocrs.preload(lightOnOCR.ID)
+	t.Cleanup(a.ocrs.stop)
 	if textOn {
 		a.text = &server{role: "text"}
 		a.textModel, _ = findText("gemma-4-e4b")
@@ -137,7 +143,7 @@ func TestModelsSayWhatEachIsFor(t *testing.T) {
 	for _, m := range list.Data {
 		got[m.ID] = fmt.Sprint(m.Purposes, m.ContextLength)
 	}
-	want := map[string]string{"BAAI/bge-m3": "[embedding] 8192", "lightonocr-2": "[ocr] 0", "gemma-4-e4b": "[llm] 16384"}
+	want := map[string]string{"BAAI/bge-m3": "[embedding] 8192", "lightonocr-2": "[ocr] 0", "indra-ocr": "[ocr] 0", "gemma-4-e4b": "[llm] 16384"}
 	if fmt.Sprint(got) != fmt.Sprint(want) {
 		t.Fatalf("models %v, want %v", got, want)
 	}
@@ -167,17 +173,73 @@ func TestEmbeddingsAndTextAreForwarded(t *testing.T) {
 	}
 }
 
-func TestWithoutGPUEmbeddingsOnly(t *testing.T) {
+func TestWithoutGPUIndraReadsDocuments(t *testing.T) {
 	a, _, srv := newTestApp(t, false)
 	a.ocr = nil
-	if _, body := get(t, srv.URL+"/v1/models"); strings.Contains(body, lightOnOCR.ID) {
-		t.Fatalf("OCR listed without a GPU: %s", body)
+	a.ocrs = newOCRSwitch(context.Background(), map[string]ocrEngine{indraOCR.ID: a.indra}, t.TempDir()+"/ocr-model", indraOCR.ID)
+	t.Cleanup(a.ocrs.stop)
+	if status, _ := get(t, srv.URL+"/ready"); status != 503 {
+		t.Fatalf("ready before Indra is loaded: %d", status)
 	}
-	if status, _ := post(t, srv.URL+"/v1/chat/completions", map[string]any{"model": appleVisionOCR}); status != 404 {
-		t.Fatalf("OCR without a GPU: %d", status)
+	a.ocrs.preload(indraOCR.ID)
+	if _, body := get(t, srv.URL+"/v1/models"); strings.Contains(body, lightOnOCR.ID) || !strings.Contains(body, indraOCR.ID) {
+		t.Fatalf("models without a GPU: %s", body)
+	}
+	if status, body := post(t, srv.URL+"/v1/chat/completions", ocrRequest(lightOnOCR.ID, filePart(t, "testdata/two-pages.pdf", "application/pdf"))); status != 404 || !strings.Contains(body, "indra-ocr") {
+		t.Fatalf("LightOnOCR without a GPU: %d %s", status, body)
+	}
+	// apple-vision-ocr, Lemmary's choice when the OCR model is left blank,
+	// is the model in memory.
+	if status, body := post(t, srv.URL+"/v1/chat/completions", ocrRequest(appleVisionOCR, filePart(t, "testdata/two-pages.pdf", "application/pdf"))); status != 200 || !strings.Contains(body, "indra read in.pdf") || !strings.Contains(body, `"model":"indra-ocr"`) {
+		t.Fatalf("OCR without a GPU: %d %s", status, body)
 	}
 	if status, _ := get(t, srv.URL+"/ready"); status != 200 {
-		t.Fatalf("ready without OCR: %d", status)
+		t.Fatalf("ready with Indra loaded: %d", status)
+	}
+}
+
+func TestOneOCRModelInMemory(t *testing.T) {
+	a, _, srv := newTestApp(t, false)
+	light := a.ocrs.engines[lightOnOCR.ID].(*fakeEngine)
+	pdf := filePart(t, "testdata/two-pages.pdf", "application/pdf")
+	if status, body := post(t, srv.URL+"/v1/chat/completions", ocrRequest(indraOCR.ID, pdf)); status != 200 || !strings.Contains(body, "indra read in.pdf") {
+		t.Fatalf("indra-ocr: %d %s", status, body)
+	}
+	if light.up.Load() || !a.indra.ready() || a.ocrs.current() != indraOCR.ID {
+		t.Fatalf("after indra-ocr: LightOnOCR up %v, Indra ready %v, current %s", light.up.Load(), a.indra.ready(), a.ocrs.current())
+	}
+	// The model used last is what the next start loads.
+	if b, _ := os.ReadFile(a.ocrs.lastFile); strings.TrimSpace(string(b)) != indraOCR.ID {
+		t.Fatalf("last model file %q", b)
+	}
+	needTool(t, "pdftoppm")
+	if status, _ := post(t, srv.URL+"/v1/chat/completions", ocrRequest(lightOnOCR.ID, pdf)); status != 200 {
+		t.Fatalf("lightonocr-2: %d", status)
+	}
+	if !light.up.Load() || a.indra.ready() || light.started.Load() != 2 {
+		t.Fatalf("after lightonocr-2: LightOnOCR up %v (started %d), Indra ready %v", light.up.Load(), light.started.Load(), a.indra.ready())
+	}
+}
+
+func TestIndraDocumentFailures(t *testing.T) {
+	a, _, srv := newTestApp(t, false)
+	a.pageTimeout = time.Second
+	doc := func(content, mime string) any {
+		return map[string]any{"type": "file", "file": map[string]any{"file_data": "data:" + mime + ";base64," + base64.StdEncoding.EncodeToString([]byte(content))}}
+	}
+	if status, body := post(t, srv.URL+"/v1/chat/completions", ocrRequest(indraOCR.ID, doc("%PDF locked", "application/pdf"))); status != 422 || !strings.Contains(body, "password-protected") {
+		t.Fatalf("locked PDF: %d %s", status, body)
+	}
+	if status, _ := post(t, srv.URL+"/v1/chat/completions", ocrRequest(indraOCR.ID, doc("hi", "text/plain"))); status != 415 {
+		t.Fatalf("text file: %d", status)
+	}
+	// A page that makes no progress is stopped, tried once more on a new
+	// worker, and answered 504.
+	if status, body := post(t, srv.URL+"/v1/chat/completions", ocrRequest(indraOCR.ID, doc("%PDF hang", "application/pdf"))); status != 504 || !strings.Contains(body, "no progress") {
+		t.Fatalf("stalled page: %d %s", status, body)
+	}
+	if status, _ := post(t, srv.URL+"/v1/chat/completions", ocrRequest(indraOCR.ID, doc("%PDF fine", "application/pdf"))); status != 200 {
+		t.Fatalf("after a stall: %d", status)
 	}
 }
 

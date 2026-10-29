@@ -34,6 +34,7 @@ final class APIService {
             docling: DoclingEndpoint(
                 converter: converter,
                 isReady: { await MainActor.run { ocr.status == .ready } },
+                loadedModel: { await MainActor.run { ocr.loaded } },
                 uploadDirectory: Paths.uploads,
                 version: AppInfo.version,
                 onConversion: record

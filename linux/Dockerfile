@@ -5,7 +5,8 @@
 #   docker run --gpus all -p 5001:5001 -v lemmary-local-ai:/data lemmary-local-ai [-text-model gemma-4-e4b]
 FROM golang:1.27 AS build
 WORKDIR /src
-COPY go.mod *.go ./
+# The Indra worker is embedded in the binary.
+COPY go.mod *.go indra_worker.py ./
 RUN CGO_ENABLED=0 go build -trimpath -ldflags=-s -o /out/lemmary-local-ai .
 
 FROM ubuntu:24.04 AS llama

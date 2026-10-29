@@ -16,9 +16,9 @@ struct UploadConversion: Sendable {
     var uploadDirectory: URL
     var onConversion: @Sendable (ConversionEvent) -> Void
 
-    func run(data: Data, declaredType: String?, filename: String?) async -> Result {
+    func run(data: Data, declaredType: String?, filename: String?, model: OCRModel?) async -> Result {
         let media = MediaType.resolve(declared: declaredType, filename: filename, data: data)
-        guard let kind = media.kind else {
+        guard let kind = media.kind, model?.reads(kind) ?? true else {
             return .unsupported(mimeType: media.mimeType)
         }
 
@@ -40,7 +40,7 @@ struct UploadConversion: Sendable {
         }
 
         do {
-            switch try await converter.convert(file: input, kind: kind) {
+            switch try await converter.convert(file: input, kind: kind, model: model) {
             case .converted(let markdown, let pages):
                 return .converted(markdown: markdown, pages: pages, duration: report(pages: pages, failure: nil))
             case .failed(let reason):
@@ -56,6 +56,8 @@ struct UploadConversion: Sendable {
             }
         } catch let unavailable as ConverterUnavailable {
             return .serverError(.serviceUnavailable, unavailable.description)
+        } catch is UnreadableByModel {
+            return .unsupported(mimeType: media.mimeType)
         } catch {
             _ = report(pages: nil, failure: "\(error)")
             return .serverError(.internalServerError, "\(error)")
@@ -72,14 +74,17 @@ public struct DeferredConverter: DocumentConverting {
         self.current = current
     }
 
-    public func convert(file: URL, kind: MediaKind) async throws -> ConversionOutcome {
+    public func convert(file: URL, kind: MediaKind, model: OCRModel?) async throws -> ConversionOutcome {
         guard let converter = await current() else { throw ConverterUnavailable() }
-        return try await converter.convert(file: file, kind: kind)
+        return try await converter.convert(file: file, kind: kind, model: model)
     }
 }
 
-/// OCR is stopped, or restarting.
+/// OCR is stopped or restarting, or a model cannot start yet.
 public struct ConverterUnavailable: Error, CustomStringConvertible {
-    public init() {}
-    public var description: String { "OCR is not running" }
+    public var description: String
+
+    public init(_ description: String = "OCR is not running") {
+        self.description = description
+    }
 }

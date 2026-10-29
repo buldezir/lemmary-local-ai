@@ -67,10 +67,7 @@ func (s *server) runOnce(ctx context.Context) error {
 	cmd.Stdout, cmd.Stderr = logFile, logFile
 	// The release tarball keeps its libraries beside the binaries.
 	cmd.Env = append(os.Environ(), "LD_LIBRARY_PATH="+filepath.Dir(s.exe)+":"+os.Getenv("LD_LIBRARY_PATH"))
-	// A llama-server outliving this process would hold its model in VRAM
-	// beside the next one's. The Mac app reaps those through pid files; Linux
-	// can have the kernel kill them.
-	cmd.SysProcAttr = &syscall.SysProcAttr{Pdeathsig: syscall.SIGKILL}
+	cmd.SysProcAttr = killedWithUs()
 	cmd.Cancel = func() error { return cmd.Process.Signal(syscall.SIGTERM) }
 	cmd.WaitDelay = 10 * time.Second
 	if err := cmd.Start(); err != nil {

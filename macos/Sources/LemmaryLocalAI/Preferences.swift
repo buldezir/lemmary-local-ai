@@ -20,6 +20,8 @@ enum Preferences {
         static let modelPath = "ModelPath"
         static let contextTokens = "ContextTokens"
         static let parallelConversions = "ParallelConversions"
+        /// The OCR model used last, which is the one loaded at launch.
+        static let ocrModel = "OCRModel"
         static let pageTimeout = "PageTimeout"
         static let textModelEnabled = "TextModelEnabled"
         static let textModel = "TextModel"
@@ -40,7 +42,10 @@ enum Preferences {
             Key.allowRemote: true,
             Key.modelPath: "",
             Key.contextTokens: 8192,
-            Key.parallelConversions: 2,
+            // One worker: a second doubled the memory for the few times two
+            // documents arrive together.
+            Key.parallelConversions: 1,
+            Key.ocrModel: OCRModel.appleVision.rawValue,
             Key.pageTimeout: 60,
             Key.textModelEnabled: false,
             Key.textModel: TextModel.gemma4E4B.rawValue,
@@ -69,6 +74,16 @@ enum Preferences {
     static var contextTokens: Int { max(512, UserDefaults.standard.integer(forKey: Key.contextTokens)) }
     static var parallelConversions: Int { max(1, UserDefaults.standard.integer(forKey: Key.parallelConversions)) }
     static var pageTimeout: TimeInterval { TimeInterval(max(10, UserDefaults.standard.integer(forKey: Key.pageTimeout))) }
+    /// Set by the OCR service each time it loads a model, not by Settings. A
+    /// copy running from `.build` shares the installed app's settings, so it
+    /// leaves the installed app's choice alone.
+    static var ocrModel: OCRModel {
+        get { UserDefaults.standard.string(forKey: Key.ocrModel).flatMap(OCRModel.init(rawValue:)) ?? .appleVision }
+        set {
+            guard !isRunningFromBuildDirectory else { return }
+            UserDefaults.standard.set(newValue.rawValue, forKey: Key.ocrModel)
+        }
+    }
 
     /// Off by default: it costs 6 to 19 GB of memory, and Lemmary can extract
     /// metadata with a hosted model instead.

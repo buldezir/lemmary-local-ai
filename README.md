@@ -7,8 +7,10 @@ Local AI** type, and documents never leave your network.
 
 | | Runs on | OCR |
 |---|---|---|
-| [**macOS**](macos/README.md) | a menu bar app for Apple Silicon, signed and self-updating; [download](https://github.com/buldezir/lemmary-local-ai/releases/latest) | Apple Vision |
-| [**Linux**](linux/README.md) | a command or Docker image for an NVIDIA GPU; 16 GB or more for a text model; embeddings alone without a GPU | LightOnOCR-2 |
+| [**macOS**](macos/README.md) | a menu bar app for Apple Silicon, signed and self-updating; [download](https://github.com/buldezir/lemmary-local-ai/releases/latest) | Apple Vision or Indra |
+| [**Linux**](linux/README.md) | a command or Docker image for an NVIDIA GPU; 16 GB or more for a text model; embeddings and Indra alone without a GPU | LightOnOCR-2 or Indra |
 
 Both answer the same API and serve the same embeddings model, so Lemmary can
-move between them without re-embedding its archive.
+move between them without re-embedding its archive. Each offers two OCR models
+and keeps the one used last in memory; [Indra OCR](https://github.com/datalab-to/indra)
+is on both, on the CPU.

@@ -17,15 +17,17 @@ const maxBody = 128 << 20
 
 // app answers everything on one port, so Lemmary needs one provider of its
 // lemmary_local_ai type: embeddings and the text model are forwarded to their
-// llama-servers, OCR pages are read here one at a time by the OCR model's.
+// llama-servers, documents are read here by whichever OCR model is asked for,
+// LightOnOCR-2 page by page or Indra a document at a time.
 type app struct {
-	embed, ocr, text *server // ocr is nil without a GPU, text when off
-	ocrModel         model
+	embed, ocr, text *server // ocr is LightOnOCR-2's, nil without a GPU; text nil when off
+	ocrs             *ocrSwitch
+	indra            *indraEngine
 	textModel        model
 	embedContext     int
 	textContext      int
 	pageTimeout      time.Duration
-	parallel         int // the OCR server's slots
+	parallel         int // LightOnOCR's slots, and Indra's workers
 }
 
 func (a *app) routes() http.Handler {
@@ -73,11 +75,14 @@ func entry(m model, title string, context int) modelEntry {
 	return e
 }
 
+// models lists Indra always, and LightOnOCR-2 with a GPU: the one not in
+// memory starts when it is asked for.
 func (a *app) models() []modelEntry {
 	list := []modelEntry{entry(bgeM3, bgeM3.Title, a.embedContext)}
 	if a.ocr != nil {
-		list = append(list, entry(a.ocrModel, a.ocrModel.Title+" OCR", 0))
+		list = append(list, entry(lightOnOCR, lightOnOCR.Title+" OCR", 0))
 	}
+	list = append(list, entry(indraOCR, indraOCR.Title, 0))
 	if a.text != nil {
 		list = append(list, entry(a.textModel, a.textModel.Title, a.textContext))
 	}
@@ -94,7 +99,7 @@ func (a *app) model(w http.ResponseWriter, r *http.Request) {
 	openAIError(w, http.StatusNotFound, fmt.Sprintf("The model '%s' does not exist", r.PathValue("id")))
 }
 
-// chat sends the OCR model's requests to OCR and any other to the text model,
+// chat sends an OCR model's requests to OCR and any other to the text model,
 // whichever one is running.
 func (a *app) chat(w http.ResponseWriter, r *http.Request) {
 	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxBody))
@@ -106,12 +111,18 @@ func (a *app) chat(w http.ResponseWriter, r *http.Request) {
 		Model string `json:"model"`
 	}
 	json.Unmarshal(body, &req)
-	if req.Model == a.ocrModel.ID || req.Model == appleVisionOCR {
+	switch req.Model {
+	case appleVisionOCR:
+		a.ocrChat(w, r, body, a.ocrs.current())
+		return
+	case lightOnOCR.ID:
 		if a.ocr == nil {
-			openAIError(w, http.StatusNotFound, "OCR is not served: it needs an NVIDIA GPU")
+			openAIError(w, http.StatusNotFound, lightOnOCR.ID+" needs an NVIDIA GPU; "+indraOCR.ID+" reads documents on the CPU")
 			return
 		}
-		a.ocrChat(w, r, body)
+		fallthrough
+	case indraOCR.ID:
+		a.ocrChat(w, r, body, req.Model)
 		return
 	}
 	if a.text == nil {
@@ -124,10 +135,13 @@ func (a *app) chat(w http.ResponseWriter, r *http.Request) {
 
 func (a *app) ready(w http.ResponseWriter, r *http.Request) {
 	var waiting []string
-	for _, s := range []*server{a.embed, a.ocr, a.text} {
+	for _, s := range []*server{a.embed, a.text} {
 		if s != nil && s.Port() == 0 {
 			waiting = append(waiting, s.role)
 		}
+	}
+	if !a.ocrs.ready() {
+		waiting = append(waiting, "ocr")
 	}
 	if len(waiting) > 0 {
 		http.Error(w, "starting: "+strings.Join(waiting, ", "), http.StatusServiceUnavailable)

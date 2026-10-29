@@ -8,7 +8,7 @@ struct SettingsView: View {
     @AppStorage(Preferences.Key.allowRemote) private var allowRemote = true
     @AppStorage(Preferences.Key.port) private var port = 5001
     @AppStorage(Preferences.Key.contextTokens) private var contextTokens = 8192
-    @AppStorage(Preferences.Key.parallelConversions) private var parallelConversions = 2
+    @AppStorage(Preferences.Key.parallelConversions) private var parallelConversions = 1
     @AppStorage(Preferences.Key.pageTimeout) private var pageTimeout = 60
     @AppStorage(Preferences.Key.textModelEnabled) private var textModelEnabled = false
     @AppStorage(Preferences.Key.textModel) private var textModel = TextModel.gemma4E4B.rawValue
@@ -48,18 +48,21 @@ struct SettingsView: View {
             }
 
             Section("OCR") {
+                caption("Two OCR models, both always offered: apple-vision-ocr (Apple Vision) and indra-ocr (Indra OCR, which reads a PDF's own text where it has one, and printed scans and tables better). Lemmary chooses one by name. Only the one used last is in memory; asking for the other replaces it, which takes about a second for Indra and up to 40 seconds for Vision.")
+                caption("Indra's model weights are licensed by Datalab under a modified OpenRAIL-M licence: free for personal use, research and organisations under $20M in revenue and funding, but not for a product competing with Datalab's. The app downloads them, with the licence, from Hugging Face.")
                 Picker("Documents at once", selection: $parallelConversions) {
                     Text("1").tag(1)
                     Text("2").tag(2)
                     Text("4").tag(4)
                 }
+                caption("Each takes a worker of 0.4 to 0.6 GB.")
                 Picker("Give up on a page after", selection: $pageTimeout) {
                     Text("30 seconds").tag(30)
                     Text("1 minute").tag(60)
                     Text("2 minutes").tag(120)
                     Text("5 minutes").tag(300)
                 }
-                caption("A page normally takes well under a second. One that makes no progress for this long has hit the Vision hang; it is stopped and tried once more.")
+                caption("A page normally takes well under a second. One that makes no progress for this long, such as one caught in the Vision hang, is stopped and tried once more.")
             }
 
             Section("Text model") {

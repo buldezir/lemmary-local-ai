@@ -6,7 +6,8 @@
 #
 # Layout:
 #   Contents/MacOS/LemmaryLocalAI   the menu bar app
-#   Contents/MacOS/ocr-worker       one process per OCR conversion
+#   Contents/MacOS/ocr-worker       Apple Vision's OCR worker, pooled by the app
+#   Contents/Resources/indra_worker.py  Indra's, run by the Python the app downloads
 #   Contents/MacOS/llama-server     upstream llama.cpp, unmodified but for an rpath
 #   Contents/Frameworks/*.dylib     what llama-server links, and nothing else
 #   Contents/Frameworks/Sparkle.framework   the app's updater
@@ -28,6 +29,7 @@ rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Frameworks" "$APP/Contents/Resources"
 cp Resources/Info.plist "$APP/Contents/Info.plist"
 cp Resources/LemmaryLocalAI.icns "$APP/Contents/Resources/LemmaryLocalAI.icns"
+cp Resources/indra_worker.py "$APP/Contents/Resources/indra_worker.py"
 cp "$BIN/LemmaryLocalAI" "$BIN/ocr-worker" "$APP/Contents/MacOS/"
 cp "$LLAMA/llama-server" "$APP/Contents/MacOS/"
 cp "$LLAMA/LICENSE" "$APP/Contents/Resources/llama.cpp-LICENSE"

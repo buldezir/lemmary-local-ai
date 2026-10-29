@@ -72,12 +72,12 @@ public struct APIRouter: Sendable {
         }
     }
 
-    /// By model: the OCR model reads the attached document, any other name goes
+    /// By model: an OCR model reads the attached document, any other name goes
     /// to the text model, whichever one Settings has chosen.
     private func chat(_ request: HTTPRequest) async -> HTTPResponse {
         let model = (try? JSONSerialization.jsonObject(with: request.body) as? [String: Any])?["model"] as? String
-        if model == OCRChatEndpoint.model {
-            return await ocr.handle(request)
+        if let ocrModel = model.flatMap(OCRModel.init(rawValue:)) {
+            return await ocr.handle(request, model: ocrModel)
         }
         guard let text = await upstreams().text else {
             return .openAIError(.notFound, "\(model ?? "this model") is not served: the text model is off in Settings")
@@ -89,14 +89,15 @@ public struct APIRouter: Sendable {
     }
 
     /// Every model served, each with what it is for, so a client can fill a
-    /// picker per job instead of guessing from names.
+    /// picker per job instead of guessing from names. Both OCR models always:
+    /// the one not in memory starts when it is asked for.
     private func models() async -> [ModelList.Entry] {
         let now = await upstreams()
         var data = [
             ModelList.Entry(id: embeddingsModel, name: "\(embeddingsModel) embeddings", purpose: .embedding,
                             contextLength: now.embeddingsContext),
-            ModelList.Entry(id: OCRChatEndpoint.model, name: "Apple Vision OCR", purpose: .ocr, contextLength: nil),
         ]
+        data += OCRModel.allCases.map { ModelList.Entry(id: $0.id, name: $0.title, purpose: .ocr, contextLength: nil) }
         if let text = now.text {
             data.append(ModelList.Entry(id: text.model, name: text.title, purpose: .llm, contextLength: text.contextTokens))
         }

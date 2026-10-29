@@ -1,7 +1,7 @@
 # Lemmary Local AI
 
 A macOS menu bar app that serves [Lemmary](https://github.com/buldezir/lemmary)'s local embeddings and
-local OCR from an Apple Silicon Mac, and optionally a small text model for
+local OCR, by Apple Vision or Indra, from an Apple Silicon Mac, and optionally a small text model for
 Lemmary's metadata extraction. It replaces the hand-built setup in Lemmary's
 `docs/local_ai_macos.md`: three LaunchAgents, Homebrew's llama.cpp, a 2 GB
 Python environment for docling-serve, an ocrmac patch and a watchdog script.
@@ -12,9 +12,9 @@ All three answer on one port, 5001, so Lemmary needs one provider for them:
 
 | | Embeddings | OCR | Text model (optional) |
 |---|---|---|---|
-| Engine | `llama-server` (llama.cpp, Metal), bundled | Apple Vision `RecognizeDocumentsRequest` | a second `llama-server` |
-| Model | `BAAI/bge-m3`, F16 GGUF, downloaded and checksummed on first run | built into macOS | one of five 4-bit GGUFs, the larger ones on a Mac with 24 or 32 GB, downloaded and checksummed when turned on |
-| Model name in Lemmary | `BAAI/bge-m3` | `apple-vision-ocr` | `gemma-4-e4b`, or the one chosen |
+| Engine | `llama-server` (llama.cpp, Metal), bundled | Apple Vision `RecognizeDocumentsRequest`, or [Indra OCR](https://github.com/datalab-to/indra) on ONNX Runtime; one in memory at a time | a second `llama-server` |
+| Model | `BAAI/bge-m3`, F16 GGUF, downloaded and checksummed on first run | Vision is built into macOS; Indra's Python, packages and models, about 180 MB, are downloaded and checksummed on first run | one of five 4-bit GGUFs, the larger ones on a Mac with 24 or 32 GB, downloaded and checksummed when turned on |
+| Model name in Lemmary | `BAAI/bge-m3` | `apple-vision-ocr` or `indra-ocr` | `gemma-4-e4b`, or the one chosen |
 | API | OpenAI `/v1/embeddings` | OpenAI `/v1/chat/completions` with the document attached, or docling-serve's `POST /v1/convert/file` | OpenAI `/v1/chat/completions` |
 
 Lemmary needs no change: its OpenAI provider type reaches all three at
@@ -25,8 +25,9 @@ guide already uses, so nothing needs re-embedding.
 ## Requirements
 
 - Apple Silicon, macOS 26 or newer (Vision's document reader is new in 26).
-- About 1.5 GB of memory for embeddings (mostly the model) and 0.1 to 0.3 GB
-  per OCR worker. The text model adds 5.7 to 18.7 GB, depending on the
+- About 1.5 GB of memory for embeddings (mostly the model) and 0.1 to 0.6 GB
+  per OCR worker, Vision's or Indra's; one worker by default. Indra takes
+  370 MB of disk. The text model adds 5.7 to 18.7 GB, depending on the
   model; Settings offers the larger ones only on a Mac with 24 or 32 GB. With
   everything on and Gemma 4 E4B, a 16 GB Mac still had about half its memory
   free.
@@ -73,7 +74,8 @@ Add one provider of type **OpenAI**:
 - API key: anything. Lemmary refuses an empty one; this app checks none.
 
 Then choose its models per job: `BAAI/bge-m3` for embeddings,
-`apple-vision-ocr` for OCR, and the text model's name (see
+`apple-vision-ocr` or `indra-ocr` for OCR (see [Two OCR models](#two-ocr-models)),
+and the text model's name (see
 [Text model](#text-model)) for extraction only. Lemmary's pickers list them
 from `GET /v1/models`, where each model says what it is for:
 
@@ -81,6 +83,7 @@ from `GET /v1/models`, where each model says what it is for:
 |---|---|---|---|
 | `BAAI/bge-m3` | `["embedding"]` | `embeddings` | the embeddings context, 8192 |
 | `apple-vision-ocr` | `["ocr"]` | `ocr` | none |
+| `indra-ocr` | `["ocr"]` | `ocr` | none |
 | the text model, while it is on | `["llm"]` | `completion_chat` | the text model's context, 16,384 |
 
 `purposes` uses Lemmary's own names for the jobs, and `capabilities` is
@@ -93,7 +96,9 @@ comes back as an error with that reason.
 
 Lemmary's other two types work against the same port, for an install that
 already has them: a `local` embeddings provider at `http://<mac>:5001/v1`, and a
-`docling` OCR provider at `http://<mac>:5001`.
+`docling` OCR provider at `http://<mac>:5001`. A docling provider whose OCR
+model is set sends it as `ocr_engine`, which picks the model here; without
+one, the model in memory reads the document.
 
 ### Moving from the LaunchAgent setup
 
@@ -129,7 +134,7 @@ A changed OCR port becomes the one port.
 | Accept connections from other computers | on | off binds the port to 127.0.0.1 |
 | Port | 5001 | embeddings, OCR and the text model; the llama-servers behind it are on loopback |
 | Longest input | 8192 tokens | 6144 uses less memory but fails Lemmary's longest inputs |
-| Documents at once | 2 | one warm OCR worker process per document |
+| Documents at once | 1 | one warm OCR worker process per document, of the model in memory |
 | Give up on a page after | 60 s | a page normally takes 0.1 to 0.3 s |
 | Serve a text model | off | |
 | Text model | Gemma 4 E4B | or a larger one, by the Mac's memory; see below |
@@ -146,7 +151,8 @@ A copy started from `.build` shares the installed app's settings (same bundle
 identifier), so change its settings this way, not in its Settings window.
 
 Logs are in `~/Library/Logs/LemmaryLocalAI/`: `llama-server.log`,
-`text-model.log`, and `ocr.log` with one line per document.
+`text-model.log`, and `ocr.log` with one line per document and per OCR model
+loaded or unloaded.
 
 ## Text model
 
@@ -211,6 +217,38 @@ worker sends one at a time and allows 90 s (`AI_TIMEOUT_SEC`); if several
 Lemmary instances share this Mac, raise that. While it reads a document,
 embeddings slow down (a 64-text batch took 18 s instead of 4; a search query
 200 ms instead of 20), and OCR about doubles; nothing fails.
+
+## Two OCR models
+
+Both are always listed in `/v1/models`, and Lemmary picks one by name. Only
+the model used last has its workers in memory: asking for the other replaces
+them once the documents in flight are done, which took 0.4 s either way on an
+M6 once each had run before (the first Indra start after its download, 3.8 s;
+Vision's, up to 40 s if macOS has unloaded its models). The app starts with
+the model used last.
+
+| | `apple-vision-ocr` | `indra-ocr` |
+|---|---|---|
+| Engine | Apple Vision, in `ocr-worker` processes | [Indra OCR](https://github.com/datalab-to/indra) 1.1.2 on ONNX Runtime, in Python workers on the CPU (four threads each) |
+| Reads | PDFs, images, Word and HTML | PDFs and images; a PDF's own text layer where it passes Indra's checks |
+| A page | 0.15 s, born-digital or scanned | 0.02 s from a text layer, 0.17 s by OCR |
+| Better at | handwritten fields in forms | printed text, small print, tables, lists |
+
+On 812 pages of a Lemmary archive (583 born-digital PDFs, mostly German
+invoices), scored against each page's own text layer with Indra reading by OCR
+alone, Vision kept 75% of the words and 80% of the numbers, Indra 99%; on the
+same pages degraded to office scans, 83% and 76% against 98% and 98%. Vision
+reads a page at a reduced resolution of its own and garbles small print even on
+a clean PDF. On [OmniParseBench](https://github.com/datalab-to/omni_parse_bench)
+(2,937 pages) Vision passed 24% of the text tests and 22% of the table tests,
+Indra by OCR alone 41% and 53%.
+
+Indra's code is Apache-2.0. Its model weights are Datalab's, under a modified
+OpenRAIL-M licence that the app downloads with them: free for personal use,
+research and organisations under $20M in revenue and funding, not for a
+product competing with Datalab's. A request that names neither model, from a
+docling client without an engine, goes to the model used last, or to Vision
+for Word and HTML, which Indra does not read.
 
 ## OCR compared with docling-serve
 

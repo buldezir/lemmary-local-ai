@@ -41,8 +41,9 @@ func (e *statusError) Error() string { return e.message }
 
 // ocrChat answers a chat completion whose user message carries documents, the
 // way Lemmary's OpenAI client reads one: a file part for a PDF, an image_url
-// part for an image, each a base64 data URL. The prompt is not read.
-func (a *app) ocrChat(w http.ResponseWriter, r *http.Request, body []byte) {
+// part for an image, each a base64 data URL. The prompt is not read. model is
+// the OCR model to read them with, which is put in memory first.
+func (a *app) ocrChat(w http.ResponseWriter, r *http.Request, body []byte, model string) {
 	start := time.Now()
 	docs, err := attachments(body)
 	if err != nil {
@@ -50,9 +51,15 @@ func (a *app) ocrChat(w http.ResponseWriter, r *http.Request, body []byte) {
 		return
 	}
 	if len(docs) == 0 {
-		openAIError(w, http.StatusBadRequest, a.ocrModel.ID+" reads documents: send a PDF or an image as a content part of the user message")
+		openAIError(w, http.StatusBadRequest, model+" reads documents: send a PDF or an image as a content part of the user message")
 		return
 	}
+	release, err := a.ocrs.acquire(r.Context(), model)
+	if err != nil {
+		fail(w, err)
+		return
+	}
+	defer release()
 	dir, err := os.MkdirTemp("", "lemmary-ocr-")
 	if err != nil {
 		openAIError(w, http.StatusInternalServerError, err.Error())
@@ -61,26 +68,37 @@ func (a *app) ocrChat(w http.ResponseWriter, r *http.Request, body []byte) {
 	defer os.RemoveAll(dir)
 
 	var texts []string
+	pages := 0
 	for i, doc := range docs {
-		pages, err := render(r.Context(), doc, filepath.Join(dir, strconv.Itoa(i)))
+		in := filepath.Join(dir, strconv.Itoa(i))
+		if model == indraOCR.ID {
+			text, n, err := a.readDocument(r.Context(), doc, in)
+			if err != nil {
+				fail(w, err)
+				return
+			}
+			texts, pages = append(texts, text), pages+n
+			continue
+		}
+		images, err := render(r.Context(), doc, in)
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		read, err := a.readPages(r.Context(), pages)
+		read, err := a.readPages(r.Context(), images)
 		if err != nil {
 			fail(w, err)
 			return
 		}
-		texts = append(texts, read...)
+		texts, pages = append(texts, read...), pages+len(read)
 	}
 	content := strings.Join(texts, "\n\n")
-	log.Printf("ocr: %d pages in %.1fs, %d characters", len(texts), time.Since(start).Seconds(), len(content))
+	log.Printf("ocr: %s, %d pages in %.1fs, %d characters", model, pages, time.Since(start).Seconds(), len(content))
 	writeJSON(w, http.StatusOK, map[string]any{
 		"id":      fmt.Sprintf("chatcmpl-%d", time.Now().UnixNano()),
 		"object":  "chat.completion",
 		"created": time.Now().Unix(),
-		"model":   a.ocrModel.ID,
+		"model":   model,
 		"choices": []any{map[string]any{"index": 0, "message": map[string]string{"role": "assistant", "content": content}, "finish_reason": "stop"}},
 		"usage":   map[string]int{"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
 	})
@@ -217,6 +235,38 @@ func render(ctx context.Context, doc attachment, dir string) ([]string, error) {
 	return pages, nil
 }
 
+// readDocument has an Indra worker read a whole document: a PDF as it came,
+// so that Indra reads its text layer where it passes Indra's checks, or an
+// image, which the worker converts itself if OpenCV cannot read it.
+func (a *app) readDocument(ctx context.Context, doc attachment, dir string) (string, int, error) {
+	var kind, ext string
+	switch {
+	case doc.mime == "application/pdf":
+		kind, ext = "pdf", ".pdf"
+	case strings.HasPrefix(doc.mime, "image/"):
+		kind, ext = "image", "."+strings.TrimPrefix(doc.mime, "image/")
+	default:
+		return "", 0, &statusError{http.StatusUnsupportedMediaType, indraOCR.ID + " reads PDFs and images, not " + doc.mime}
+	}
+	if err := os.MkdirAll(dir, 0o700); err != nil {
+		return "", 0, err
+	}
+	in := filepath.Join(dir, "in"+ext)
+	if err := os.WriteFile(in, doc.data, 0o600); err != nil {
+		return "", 0, err
+	}
+	res, err := a.indra.convert(ctx, in, kind, a.pageTimeout)
+	switch {
+	case errors.Is(err, errStalled):
+		return "", 0, &statusError{http.StatusGatewayTimeout, fmt.Sprintf("the OCR worker %v and was stopped", err)}
+	case err != nil:
+		return "", 0, &statusError{http.StatusInternalServerError, "the OCR worker failed: " + err.Error()}
+	case res.Error != "":
+		return "", 0, &statusError{http.StatusUnprocessableEntity, res.Error}
+	}
+	return strings.TrimSpace(res.Markdown), res.Pages, nil
+}
+
 // readPages reads a document's pages as many at a time as the OCR server has
 // slots: generating a page's text leaves the GPU mostly idle, so pages side by
 // side cost little more than one. Another document's pages queue for a slot.
@@ -255,11 +305,11 @@ func (a *app) readPage(ctx context.Context, png string) (string, error) {
 		return "", err
 	}
 	content := []any{map[string]any{"type": "image_url", "image_url": map[string]string{"url": "data:image/png;base64," + base64.StdEncoding.EncodeToString(data)}}}
-	if a.ocrModel.Prompt != "" {
-		content = append(content, map[string]string{"type": "text", "text": a.ocrModel.Prompt})
+	if lightOnOCR.Prompt != "" {
+		content = append(content, map[string]string{"type": "text", "text": lightOnOCR.Prompt})
 	}
 	body, _ := json.Marshal(map[string]any{
-		"model":       a.ocrModel.ID,
+		"model":       lightOnOCR.ID,
 		"messages":    []any{map[string]any{"role": "user", "content": content}},
 		"temperature": 0,
 		"max_tokens":  maxPageTokens,

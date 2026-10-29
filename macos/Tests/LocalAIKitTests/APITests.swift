@@ -4,9 +4,11 @@ import Testing
 
 private struct FakeConverter: DocumentConverting {
     var outcome: @Sendable (URL, MediaKind) throws -> ConversionOutcome
+    var models: ModelLog? = nil
 
-    func convert(file: URL, kind: MediaKind) async throws -> ConversionOutcome {
-        try outcome(file, kind)
+    func convert(file: URL, kind: MediaKind, model: OCRModel?) async throws -> ConversionOutcome {
+        models?.append(model)
+        return try outcome(file, kind)
     }
 }
 
@@ -103,7 +105,7 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
         return .converted(markdown: "## Rechnung", pages: 1)
     }.handle(request("POST", "/v1/chat/completions", json: lemmaryOCRRequest(part: [
         "type": "file", "file": ["filename": "doc.pdf", "file_data": "data:application/pdf;base64,JVBERg=="],
-    ])))
+    ])), model: .appleVision)
 
     #expect(response.status == .ok)
     let json = try object(response)
@@ -120,7 +122,7 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
     let response = await ocr { _, _ in .failed("the PDF is password-protected") }
         .handle(request("POST", "/v1/chat/completions", json: lemmaryOCRRequest(part: [
             "type": "file", "file": ["file_data": "data:application/pdf;base64,JVBERg=="],
-        ])))
+        ])), model: .appleVision)
     // Not 400: Lemmary would read a 400 that mentions a file as a model that
     // refuses PDFs, and send the pages again as images.
     #expect(response.status == .unprocessable)
@@ -131,7 +133,7 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
     let response = await ocr { _, _ in
         Issue.record("must not convert")
         return .failed("")
-    }.handle(request("POST", "/v1/chat/completions", json: ["model": "apple-vision-ocr", "messages": [["role": "user", "content": "hi"]]]))
+    }.handle(request("POST", "/v1/chat/completions", json: ["model": "apple-vision-ocr", "messages": [["role": "user", "content": "hi"]]]), model: .appleVision)
     #expect(response.status == .badRequest)
 }
 
@@ -139,19 +141,20 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
     let response = await ocr { _, _ in throw WorkerFailure.stalled(seconds: 60, lastProgress: nil) }
         .handle(request("POST", "/v1/chat/completions", json: lemmaryOCRRequest(part: [
             "type": "image_url", "image_url": ["url": "data:image/png;base64,iVBORw0KGgo="],
-        ])))
+        ])), model: .appleVision)
     #expect(response.status == .gatewayTimeout)
 }
 
 // MARK: - routing
 
-@Test func modelsListsAllThreeForLemmarysPickers() async throws {
+@Test func modelsListsEveryModelForLemmarysPickers() async throws {
     let response = await router(text: .init(model: "gemma-4-e4b", title: "Gemma 4 E4B", port: nil, contextTokens: 16384))
         .handle(request("GET", "/v1/models"))
     let json = try object(response)
     #expect(json["object"] as? String == "list")
     let data = try #require(json["data"] as? [[String: Any]])
-    #expect(data.compactMap { $0["id"] as? String } == ["BAAI/bge-m3", "apple-vision-ocr", "gemma-4-e4b"])
+    // Both OCR models always, whichever is in memory.
+    #expect(data.compactMap { $0["id"] as? String } == ["BAAI/bge-m3", "apple-vision-ocr", "indra-ocr", "gemma-4-e4b"])
     #expect(data.allSatisfy { $0["object"] as? String == "model" && $0["owned_by"] as? String == "lemmary-local-ai" })
     // Lemmary's embeddings picker, until it reads purposes, keeps a model whose
     // id or name says "embed".
@@ -159,7 +162,7 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
     #expect(embeddings.compactMap { $0["id"] as? String } == ["BAAI/bge-m3"])
 
     let withoutText = try object(await router().handle(request("GET", "/v1/models")))
-    #expect((withoutText["data"] as? [[String: Any]])?.count == 2)
+    #expect((withoutText["data"] as? [[String: Any]])?.count == 3)
 }
 
 @Test func eachModelSaysWhatItIsFor() async throws {
@@ -170,12 +173,14 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
     // Lemmary's purpose names, one per model.
     #expect(byID["BAAI/bge-m3"]?["purposes"] as? [String] == ["embedding"])
     #expect(byID["apple-vision-ocr"]?["purposes"] as? [String] == ["ocr"])
+    #expect(byID["indra-ocr"]?["purposes"] as? [String] == ["ocr"])
     #expect(byID["gemma-4-26b-a4b"]?["purposes"] as? [String] == ["llm"])
 
     // Mistral's capabilities shape, which Lemmary already parses.
     func capabilities(_ id: String) -> [String: Bool]? { byID[id]?["capabilities"] as? [String: Bool] }
     #expect(capabilities("BAAI/bge-m3") == ["completion_chat": false, "ocr": false, "embeddings": true])
     #expect(capabilities("apple-vision-ocr") == ["completion_chat": false, "ocr": true, "embeddings": false])
+    #expect(capabilities("indra-ocr") == ["completion_chat": false, "ocr": true, "embeddings": false])
     #expect(capabilities("gemma-4-26b-a4b") == ["completion_chat": true, "ocr": false, "embeddings": false])
 
     // The context each server runs with; Vision has none.
@@ -205,6 +210,37 @@ private func errorMessage(_ response: HTTPResponse) throws -> String? {
         ])))
     let choice = try #require((try object(response)["choices"] as? [[String: Any]])?.first)
     #expect((choice["message"] as? [String: Any])?["content"] as? String == "kind=image")
+}
+
+@Test func eachOCRModelIsAnsweredByName() async throws {
+    let models = ModelLog()
+    let r = APIRouter(
+        docling: DoclingEndpoint(converter: FakeConverter(outcome: { _, _ in .converted(markdown: "", pages: 1) }), isReady: { true },
+                                 uploadDirectory: uploads, version: "test"),
+        ocr: OCRChatEndpoint(converter: FakeConverter(outcome: { _, _ in .converted(markdown: "text", pages: 1) }, models: models),
+                             uploadDirectory: uploads),
+        embeddingsModel: "BAAI/bge-m3",
+        upstreams: { .init(embeddingsPort: nil, text: nil) }
+    )
+    for id in ["indra-ocr", "apple-vision-ocr"] {
+        var body = lemmaryOCRRequest(part: ["type": "file", "file": ["file_data": "data:application/pdf;base64,JVBERi0xLjc="]])
+        body["model"] = id
+        let response = await r.handle(request("POST", "/v1/chat/completions", json: body))
+        #expect(response.status == .ok)
+        #expect(try object(response)["model"] as? String == id)
+    }
+    #expect(models.models == [.indra, .appleVision])
+}
+
+@Test func indraRefusesWhatItCannotRead() async throws {
+    var body = lemmaryOCRRequest(part: ["type": "file", "file": [
+        "file_data": "data:application/vnd.openxmlformats-officedocument.wordprocessingml.document;base64,UEsDBA==",
+    ]])
+    body["model"] = "indra-ocr"
+    let response = await router { _, _ in .converted(markdown: "should not run", pages: 1) }
+        .handle(request("POST", "/v1/chat/completions", json: body))
+    #expect(response.status == .unsupportedMediaType)
+    #expect(try errorMessage(response)?.contains("indra-ocr reads PDFs and images") == true)
 }
 
 @Test func otherModelsNeedTheTextModel() async throws {

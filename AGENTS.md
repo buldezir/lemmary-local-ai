@@ -7,9 +7,9 @@ root.
 
 `macos/` is a menu bar app that serves Lemmary's local AI from an Apple Silicon Mac,
 all on one port so Lemmary needs one provider of its OpenAI type: bge-m3
-embeddings through a bundled `llama-server`, OCR through Apple Vision as an
-OpenAI chat model (`apple-vision-ocr`) and behind a docling-serve-compatible
-API, and, off by default, a small text model through a second `llama-server`
+embeddings through a bundled `llama-server`, OCR through Apple Vision or
+Indra OCR as OpenAI chat models (`apple-vision-ocr`, `indra-ocr`) and behind a
+docling-serve-compatible API, and, off by default, a small text model through a second `llama-server`
 for Lemmary's metadata extraction. It replaces the LaunchAgent setup in
 Lemmary's `docs/local_ai_macos.md`: same docling port (5001), embeddings model
 name and response shapes, so Lemmary's `local` and `docling` provider types
@@ -23,15 +23,19 @@ still work against it.
   router, OCR as a chat model, the proxy to the llama-servers), `Docling/` (the
   docling-compatible endpoint and media types), `Layout/` (Vision's page layout
   reduced to plain structs, and the markdown renderer), `Worker/` (the worker
-  protocol, `PersistentWorker`, `WorkerPool`), `Llama/` (both llama-server
+  protocol, `PersistentWorker`, `WorkerPool`), `OCR/` (the two OCR models,
+  `OCRSwitch`, which keeps one in memory, and `IndraRuntime`: Indra's pinned
+  Python, packages and models and their install), `Llama/` (both llama-server
   command lines, the models' URLs and hashes, restart backoff), `LogFile`.
 - `Sources/VisionOCR/`: Vision and page rendering. Only the worker links it.
 - `Sources/OCRWorker/`: `ocr-worker serve`, the long-lived worker the app
   pools, and `ocr-worker convert <file> <kind>` for trying a file by hand.
 - `Sources/LemmaryLocalAI/`: the SwiftUI app. `APIService` runs the one port,
   `LlamaService` supervises one llama-server (there are two: embeddings and the
-  text model), `OCRService` the worker pool, `ModelStore` downloads one model,
-  `UI/` the popover and Settings.
+  text model), `OCRService` the OCR switch and Indra's download, `ModelStore`
+  downloads one model, `UI/` the popover and Settings.
+- `Resources/indra_worker.py`: Indra's worker, speaking `ocr-worker serve`'s
+  protocol; the same file as `linux/indra_worker.py` (a Go test checks).
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
   drive it. `appcast.sh` and `sign-sparkle.sh` are the same files as in the
@@ -46,23 +50,26 @@ still work against it.
   Go program with no dependencies serving the same API on one port:
   llama-servers for bge-m3, OCR with LightOnOCR-2 (pages rendered by
   `pdftoppm` and ImageMagick) and the optional text model, offered by VRAM
-  tier. Without a GPU it serves the embeddings alone, on the CPU: LightOnOCR
-  there took minutes a page. Its Dockerfile pins the same llama.cpp build for
-  CUDA; its README has the measurements. Verify with `go test ./...` in
-  `linux/`.
+  tier, and Indra OCR in Python workers (`indra.go` the runtime, `worker.go`
+  the protocol and pool, `ocrswitch.go` one OCR model in memory). Without a
+  GPU it serves the embeddings and Indra, on the CPU: LightOnOCR there took
+  minutes a page. Its Dockerfile pins the same llama.cpp build for CUDA; its
+  README has the measurements. Verify with `go test ./...` in `linux/`, which
+  runs on a Mac too.
 
 ## Architecture
 
 ```
 Lemmary ──:5001──> HTTPServer (in the app) ── APIRouter
                      │
-                     ├ GET /v1/models: bge-m3, apple-vision-ocr, the text model
-                     ├ POST /v1/chat/completions, model apple-vision-ocr ─┐ OCRChatEndpoint: data URL parts
-                     ├ POST /v1/convert/file ─────────────────────────────┤ DoclingEndpoint: multipart
-                     │                                                    ▼ media type, temp file
-                     │              PoolConverter ── checkout ──> WorkerPool
-                     │                                             │ N × `ocr-worker serve`
-                     │                request line on stdin ──────>│ Vision, one page at a time
+                     ├ GET /v1/models: bge-m3, apple-vision-ocr, indra-ocr, the text model
+                     ├ POST /v1/chat/completions, an OCR model ─────────────┐ OCRChatEndpoint: data URL parts
+                     ├ POST /v1/convert/file, ocr_engine ───────────────────┤ DoclingEndpoint: multipart
+                     │                                                      ▼ media type, temp file
+                     │       OCRSwitch: one model in memory, the last used ── PoolConverter ── checkout ──> WorkerPool
+                     │                                             │ N × `ocr-worker serve` (Vision)
+                     │                                             │   or `python3 -I indra_worker.py serve` (Indra)
+                     │                request line on stdin ──────>│ one page at a time
                      │                progress/result lines <──────│
                      ├ POST /v1/embeddings ─────── UpstreamProxy ──> llama-server on 127.0.0.1:<free port>
                      └ POST /v1/chat/completions, any other model ─> llama-server with the text model (optional)
@@ -157,6 +164,33 @@ Lemmary ──:5001──> HTTPServer (in the app) ── APIRouter
   the larger ones by the Mac's memory (`TextModel.minimumMemoryGB`: 24 GB for
   Gemma 4 12B and 26B-A4B, 32 GB for Qwen3.6 35B-A3B), sized from what each
   took beside the embeddings and OCR plus about 5 GB for macOS.
+- **One OCR model in memory, the one used last** (`OCRSwitch`, and
+  `ocrswitch.go` on Linux). Each worker holds its model, 0.4 to 0.6 GB, and
+  Lemmary binds one OCR model. A request for the other waits for the requests
+  in flight, then its pool replaces the running one; while it waits, later
+  requests for the model in memory queue behind it, so neither starves the
+  other. A model that cannot start (Indra still downloading) refuses its
+  requests with 503 and leaves the running one loaded. A request naming no
+  model (a docling client without `ocr_engine`, or `apple-vision-ocr` on
+  Linux) gets the model used last, or Vision for Word and HTML, which Indra
+  does not read. The last model is kept across launches (`OCRModel`; on Linux
+  `ocr-model` in the data directory). One worker by default.
+- **Indra's runtime is downloaded, not bundled** (`IndraRuntime`,
+  `linux/indra.go`): python-build-standalone and five wheels unpacked straight
+  into its site-packages, and the models of the tag v1.1.0, each pinned by
+  SHA-256, into Application Support or the data directory. Bundled, it would
+  add about 100 MB to the app and to every Sparkle update. Nothing else is
+  installed: onnxruntime's declared dependencies are for its tools, and
+  huggingface_hub only downloads. The two apps pin the same versions; change
+  them together, and the runtime id with them, so an old runtime is replaced.
+  The worker runs Python with `-I`, so no Python of the user's leaks in.
+- **`indra_worker.py` owns its stdout**: it moves fd 1 to stderr at start and
+  keeps a private copy for the protocol, so anything Indra, ONNX Runtime or
+  OpenCV prints cannot corrupt a message.
+- **`HF_TOKEN` goes to huggingface.co only** (`linux/catalog.go`): Indra's
+  runtime downloads from GitHub and PyPI.
+- **A copy running from `.build` does not save the OCR model it loads**: it
+  shares the installed app's settings.
 - **Writes to a worker's stdin use `F_SETNOSIGPIPE`.** A worker can die between
   the check and the write; without it the app would die of SIGPIPE.
 - **One copy at a time.** A second instance hands over to the first and quits;
@@ -188,6 +222,7 @@ curl -s localhost:18080/ready           # 503 while OCR workers warm up, then 20
 curl -s localhost:18080/v1/models
 curl -s -F to_formats=md -F 'files=@some.pdf;type=application/pdf' localhost:18080/v1/convert/file
 curl -s localhost:18080/v1/chat/completions -H 'Content-Type: application/json' -d "{\"model\":\"apple-vision-ocr\",\"messages\":[{\"role\":\"user\",\"content\":[{\"type\":\"file\",\"file\":{\"file_data\":\"data:application/pdf;base64,$(base64 -i some.pdf)\"}}]}]}"
+curl -s -F to_formats=md -F ocr_engine=indra-ocr -F 'files=@some.pdf;type=application/pdf' localhost:18080/v1/convert/file   # switches to Indra
 curl -s localhost:18080/v1/embeddings -H 'Content-Type: application/json' -d '{"model":"BAAI/bge-m3","input":["test"]}'
 curl -s localhost:18080/v1/chat/completions -H 'Content-Type: application/json' -d '{"model":"gemma-4-e4b","messages":[{"role":"user","content":"Say hi"}]}'
 ```
@@ -199,6 +234,11 @@ small Go program under `backend/cmd/` can call `aiprovider.ListModels`,
 
 `-TextModelPath-gemma-4-e4b <file>` points the text model at a GGUF already on
 disk instead of the download.
+
+Indra's real download, unpacking and worker have a test each, off by default:
+`INDRA_LIVE=1 swift test --filter indraInstallsAndReads` in `macos/`, and
+`INDRA_LIVE=1 go test -run TestIndraLive` in `linux/` (the Mac's files on a
+Mac, Linux's on Linux; `INDRA_DATA` keeps the download).
 
 On the Mac mini, SwiftPM can stall for good on a keychain prompt nobody sees
 when it downloads Sparkle's binary; `swift package --disable-keychain resolve`
