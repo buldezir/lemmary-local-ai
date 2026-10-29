@@ -6,11 +6,12 @@ either. Embeddings (`BAAI/bge-m3`) and OCR (`lightonocr-2`) always run; a text
 model for metadata extraction runs when chosen. Each is a llama-server from
 llama.cpp's release `b11936` on loopback, started, health-checked and
 restarted by this program; models download on first start and are checked by
-SHA-256.
+SHA-256. Without a GPU it serves the embeddings alone, on the CPU: see
+[Without a GPU](#without-a-gpu).
 
 ```bash
 docker run --gpus all -p 5001:5001 -v lemmary-local-ai:/data \
-  ghcr.io/buldezir/lemmary-local-ai:linux-draft -text-model gemma-4-e4b
+  ghcr.io/buldezir/lemmary-local-ai:latest -text-model gemma-4-e4b
 curl -s localhost:5001/ready     # 503 while models download and load
 ```
 
@@ -33,7 +34,7 @@ Change one by restarting with the new flags.
 | `-ocr-parallel` | 2 | pages OCR reads at once, of one document or several; each takes 0.9 GB of VRAM |
 | `-page-timeout` | `2m` | give up on a page after this long |
 | `-data` | `~/.local/share/lemmary-local-ai`, `/data` in the image | where models download and llama-server logs go |
-| `-vram-gb` | from `nvidia-smi` | the GPU's memory in GB, if `nvidia-smi` cannot tell |
+| `-vram-gb` | from `nvidia-smi` | the GPU's memory in GB, if `nvidia-smi` cannot tell; with neither, embeddings alone on the CPU |
 | `-llama-server` | beside this program, else on `PATH` | the llama-server to run |
 
 The embeddings context is fixed at bge-m3's 8192 tokens, the Mac's default:
@@ -92,12 +93,30 @@ Thinking is off and streamed answers pass through as they are generated.
 
 `lemmary-local-ai -h` lists every flag. llama-server logs are in `/data/logs`.
 
+## Without a GPU
+
+When `nvidia-smi` finds no GPU, and `-vram-gb` is not given, it serves
+`BAAI/bge-m3` alone, on the CPU: OCR and a text model need a GPU, and
+`-text-model` is refused. LightOnOCR did not finish one invoice page in two
+minutes on a busy 14-core CPU. Leave out `--gpus all`:
+
+```bash
+docker run -p 5001:5001 -v lemmary-local-ai:/data ghcr.io/buldezir/lemmary-local-ai:latest
+```
+
+A 6,000-token chunk took 13.5 s on the 14 cores of an Intel Core Ultra 5
+235HX, in 1.7 GB of RAM, so one request of Lemmary's, up to 120,000 characters,
+can come near its 90 s AI timeout (`AI_TIMEOUT_SEC`); raise that on a slower
+CPU. The vectors matched the GPU's at cosine 0.9994 or better, so Lemmary can
+move between the two without re-embedding. Bind OCR in Lemmary to another
+provider.
+
 ## Without Docker
 
 It needs a distribution with glibc 2.38 or newer, such as Ubuntu 24.04 or
 Debian 13: llama.cpp's release build does not start on Ubuntu 22.04 or
 Debian 12, so use the image there. Also the NVIDIA driver, 570 or newer, with
-`nvidia-smi`.
+`nvidia-smi`, unless it is to serve [the embeddings alone](#without-a-gpu).
 
 ```bash
 sudo apt install ca-certificates libgomp1 libssl3 poppler-utils imagemagick

@@ -46,8 +46,10 @@ still work against it.
   Go program with no dependencies serving the same API on one port:
   llama-servers for bge-m3, OCR with LightOnOCR-2 (pages rendered by
   `pdftoppm` and ImageMagick) and the optional text model, offered by VRAM
-  tier. Its Dockerfile pins the same llama.cpp build for CUDA; its README has
-  the measurements. Verify with `go test ./...` in `linux/`.
+  tier. Without a GPU it serves the embeddings alone, on the CPU: LightOnOCR
+  there took minutes a page. Its Dockerfile pins the same llama.cpp build for
+  CUDA; its README has the measurements. Verify with `go test ./...` in
+  `linux/`.
 
 ## Architecture
 

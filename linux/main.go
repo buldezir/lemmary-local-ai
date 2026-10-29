@@ -1,9 +1,9 @@
 // Command lemmary-local-ai serves Lemmary's local AI from an NVIDIA GPU on
 // Linux, all on one port: bge-m3 embeddings, OCR by a vision model, and
 // optionally a text model for metadata extraction, each in a llama-server of
-// its own on loopback. It is the Linux counterpart of the macOS app in this
-// repository and answers the same API, so Lemmary's lemmary_local_ai provider
-// type works against either.
+// its own on loopback; without a GPU, the embeddings alone, on the CPU. It is
+// the Linux counterpart of the macOS app in this repository and answers the
+// same API, so Lemmary's lemmary_local_ai provider type works against either.
 package main
 
 import (
@@ -44,9 +44,12 @@ func main() {
 	vramGB := flag.Int("vram-gb", 0, "the GPU's memory in GB, if nvidia-smi cannot tell")
 	flag.Parse()
 
+	// Without a GPU, embeddings alone: OCR by a vision model took minutes a
+	// page on a CPU.
 	tier, err := vramTier(*vramGB)
-	if err != nil {
-		log.Fatal(err)
+	gpu := err == nil
+	if !gpu && *textID != "off" {
+		log.Fatalf("%v; a text model needs one", err)
 	}
 	ocrModel := lightOnOCR
 	logs := filepath.Join(*data, "logs")
@@ -56,7 +59,7 @@ func main() {
 	newServer := func(role string) *server {
 		return &server{role: role, exe: *llama, logPath: filepath.Join(logs, role+".log")}
 	}
-	a := &app{embed: newServer("embeddings"), ocr: newServer("ocr"), ocrModel: ocrModel,
+	a := &app{embed: newServer("embeddings"), ocrModel: ocrModel,
 		embedContext: embedContext, textContext: *textContext, pageTimeout: *pageTimeout, parallel: *parallel}
 
 	// Each llama-server, its model, and its command line given the model's files.
@@ -74,7 +77,10 @@ func main() {
 				"-c", strconv.Itoa(embedContext), "-b", strconv.Itoa(embedContext), "-ub", strconv.Itoa(embedContext),
 				"-np", "1", "--no-webui"}
 		}},
-		{a.ocr, ocrModel, func(p []string) []string {
+	}
+	if gpu {
+		a.ocr = newServer("ocr")
+		services = append(services, service{a.ocr, ocrModel, func(p []string) []string {
 			args := []string{"-m", p[0], "--alias", ocrModel.ID, "-ngl", "99", "-fa", "on",
 				// One slot per page read at once. Two read a four-page document
 				// in 13.4 s instead of 15.5; four were no faster.
@@ -85,7 +91,7 @@ func main() {
 				args = append(args, "--mmproj", p[1])
 			}
 			return args
-		}},
+		}})
 	}
 
 	if *textID != "off" {
@@ -135,12 +141,16 @@ func main() {
 			log.Fatal(err)
 		}
 	}()
-	text := "off"
+	on, ocr, text := fmt.Sprintf("a %d GB GPU", tier), ocrModel.ID, "off"
+	if !gpu {
+		log.Print(err)
+		on, ocr = "the CPU", "off (it needs a GPU)"
+	}
 	if a.text != nil {
 		text = a.textModel.ID
 	}
-	log.Printf("serving on %s for a %d GB GPU: embeddings %s, OCR %s, text model %s. In Lemmary, add a provider of type Lemmary Local AI with base URL http://<this host>:<port>/v1",
-		*addr, tier, bgeM3.ID, ocrModel.ID, text)
+	log.Printf("serving on %s from %s: embeddings %s, OCR %s, text model %s. In Lemmary, add a provider of type Lemmary Local AI with base URL http://<this host>:<port>/v1",
+		*addr, on, bgeM3.ID, ocr, text)
 
 	<-ctx.Done()
 	shutdown, cancel := context.WithTimeout(context.Background(), 10*time.Second)

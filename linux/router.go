@@ -19,7 +19,7 @@ const maxBody = 128 << 20
 // lemmary_local_ai type: embeddings and the text model are forwarded to their
 // llama-servers, OCR pages are read here one at a time by the OCR model's.
 type app struct {
-	embed, ocr, text *server // text is nil when off
+	embed, ocr, text *server // ocr is nil without a GPU, text when off
 	ocrModel         model
 	textModel        model
 	embedContext     int
@@ -74,7 +74,10 @@ func entry(m model, title string, context int) modelEntry {
 }
 
 func (a *app) models() []modelEntry {
-	list := []modelEntry{entry(bgeM3, bgeM3.Title, a.embedContext), entry(a.ocrModel, a.ocrModel.Title+" OCR", 0)}
+	list := []modelEntry{entry(bgeM3, bgeM3.Title, a.embedContext)}
+	if a.ocr != nil {
+		list = append(list, entry(a.ocrModel, a.ocrModel.Title+" OCR", 0))
+	}
 	if a.text != nil {
 		list = append(list, entry(a.textModel, a.textModel.Title, a.textContext))
 	}
@@ -104,6 +107,10 @@ func (a *app) chat(w http.ResponseWriter, r *http.Request) {
 	}
 	json.Unmarshal(body, &req)
 	if req.Model == a.ocrModel.ID || req.Model == appleVisionOCR {
+		if a.ocr == nil {
+			openAIError(w, http.StatusNotFound, "OCR is not served: it needs an NVIDIA GPU")
+			return
+		}
 		a.ocrChat(w, r, body)
 		return
 	}

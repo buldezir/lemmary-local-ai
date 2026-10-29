@@ -167,6 +167,20 @@ func TestEmbeddingsAndTextAreForwarded(t *testing.T) {
 	}
 }
 
+func TestWithoutGPUEmbeddingsOnly(t *testing.T) {
+	a, _, srv := newTestApp(t, false)
+	a.ocr = nil
+	if _, body := get(t, srv.URL+"/v1/models"); strings.Contains(body, lightOnOCR.ID) {
+		t.Fatalf("OCR listed without a GPU: %s", body)
+	}
+	if status, _ := post(t, srv.URL+"/v1/chat/completions", map[string]any{"model": appleVisionOCR}); status != 404 {
+		t.Fatalf("OCR without a GPU: %d", status)
+	}
+	if status, _ := get(t, srv.URL+"/ready"); status != 200 {
+		t.Fatalf("ready without OCR: %d", status)
+	}
+}
+
 func TestTextModelOffOrDown(t *testing.T) {
 	_, _, off := newTestApp(t, false)
 	if status, _ := post(t, off.URL+"/v1/chat/completions", map[string]any{"model": "gemma-4-e4b"}); status != 404 {
