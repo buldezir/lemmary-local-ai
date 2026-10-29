@@ -56,7 +56,63 @@ Thinking is off and streamed answers pass through as they are generated.
 
 `lemmary-local-ai -h` lists every flag. llama-server logs are in `/data/logs`.
 
-## Build
+## Without Docker
+
+It needs a distribution with glibc 2.38 or newer, such as Ubuntu 24.04 or
+Debian 13: llama.cpp's release build does not start on Ubuntu 22.04 or
+Debian 12, so use the image there. Also the NVIDIA driver, 570 or newer, with
+`nvidia-smi`, and Go 1.27 or newer to build.
+
+```bash
+sudo apt install ca-certificates libgomp1 libssl3 poppler-utils imagemagick
+
+# llama.cpp's build b11936 for CUDA 12.8, the one the image pins
+mkdir -p ~/lemmary-local-ai && cd ~/lemmary-local-ai
+B=https://github.com/ggml-org/llama.cpp/releases/download/b11936
+curl -fLO $B/llama-b11936-bin-ubuntu-cuda-12.8-x64.tar.gz
+curl -fLO $B/cudart-llama-b11936-bin-ubuntu-cuda-12.8-x64.tar.gz
+sha256sum -c <<'EOF'
+8c87c0623f7eba2056b13cec093f464365d0bb7e05f60beff9a09accdd5f9b49  llama-b11936-bin-ubuntu-cuda-12.8-x64.tar.gz
+30193f90b2317d6f0ef9e1f87498a0e0863769e975af7b66637d795eb4d89bb5  cudart-llama-b11936-bin-ubuntu-cuda-12.8-x64.tar.gz
+EOF
+for f in *.tar.gz; do tar xzf "$f" --strip-components=1 && rm "$f"; done
+
+# This program, beside llama-server, which is where it looks for it
+git clone https://github.com/buldezir/lemmary-local-ai /tmp/lemmary-local-ai
+CGO_ENABLED=0 go build -C /tmp/lemmary-local-ai/linux -o ~/lemmary-local-ai/lemmary-local-ai .
+
+~/lemmary-local-ai/lemmary-local-ai -text-model gemma-4-e4b
+```
+
+Models and llama-server logs go to `~/.local/share/lemmary-local-ai`
+(`-data` changes it); `-llama-server` names a llama-server elsewhere.
+
+To keep it running, as a systemd service in `/opt/lemmary-local-ai`, with
+its models in `/var/lib/lemmary-local-ai`:
+
+```bash
+sudo mv ~/lemmary-local-ai /opt/
+sudo tee /etc/systemd/system/lemmary-local-ai.service <<'EOF'
+[Unit]
+Description=Lemmary Local AI
+Wants=network-online.target
+After=network-online.target
+
+[Service]
+ExecStart=/opt/lemmary-local-ai/lemmary-local-ai -data /var/lib/lemmary-local-ai -text-model gemma-4-e4b
+DynamicUser=yes
+StateDirectory=lemmary-local-ai
+Restart=on-failure
+RestartSec=10
+
+[Install]
+WantedBy=multi-user.target
+EOF
+sudo systemctl daemon-reload && sudo systemctl enable --now lemmary-local-ai
+journalctl -u lemmary-local-ai -f
+```
+
+## Build and test
 
 ```bash
 docker build -t lemmary-local-ai linux/
