@@ -19,6 +19,42 @@ In Lemmary, add a provider of type **Lemmary Local AI** with base URL
 `lightonocr-2` for OCR and the text model for General AI; an OCR model left
 blank also works (the app answers to the Mac's `apple-vision-ocr`).
 
+## Settings
+
+Settings are flags, given after the image name with `docker run`, as
+`command:` in Compose, or on the `ExecStart` line of the systemd unit below.
+Change one by restarting with the new flags.
+
+| Flag | Default | |
+|---|---|---|
+| `-text-model` | `off` | serve a text model, and which: one of the [text models](#text-models) the GPU has room for; a larger one is refused at start |
+| `-text-context` | 16384 | the text model's context in tokens |
+| `-addr` | `:5001` | the one port, on every interface; `127.0.0.1:5001` keeps it to this machine |
+| `-ocr-parallel` | 2 | pages OCR reads at once, of one document or several; each takes 0.9 GB of VRAM |
+| `-page-timeout` | `2m` | give up on a page after this long |
+| `-data` | `~/.local/share/lemmary-local-ai`, `/data` in the image | where models download and llama-server logs go |
+| `-vram-gb` | from `nvidia-smi` | the GPU's memory in GB, if `nvidia-smi` cannot tell |
+| `-llama-server` | beside this program, else on `PATH` | the llama-server to run |
+
+The embeddings context is fixed at bge-m3's 8192 tokens, the Mac's default:
+the memory that 6144 would save does not matter on a GPU.
+
+```yaml
+services:
+  local-ai:
+    image: ghcr.io/buldezir/lemmary-local-ai:latest
+    command: ["-text-model", "gemma-4-26b-a4b"]
+    ports: ["5001:5001"]
+    volumes: ["local-ai:/data"]
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices: [{driver: nvidia, count: all, capabilities: [gpu]}]
+volumes:
+  local-ai:
+```
+
 ## OCR
 
 LightOnOCR-2 1B reads each page, rendered at 2000 px (`pdftoppm` for PDFs,
