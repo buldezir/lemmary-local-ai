@@ -59,7 +59,7 @@ if [ -n "${BUNDLE_ID:-}" ]; then plutil -replace CFBundleIdentifier -string "$BU
 if [ -n "${BUILD:-}" ]; then
   plutil -replace CFBundleVersion -string "$BUILD" "$PLIST"
 elif REV="$(git rev-parse --short HEAD 2>/dev/null)"; then
-  [ -z "$(git status --porcelain 2>/dev/null)" ] || REV="$REV-dirty"
+  [ -z "$(git status --porcelain -- . 2>/dev/null)" ] || REV="$REV-dirty"
   plutil -replace CFBundleVersion -string "$REV" "$PLIST"
 fi
 

@@ -1,6 +1,11 @@
 # Lemmary Local AI
 
-A macOS menu bar app that serves Lemmary's local AI from an Apple Silicon Mac,
+Two apps serving the same API: the macOS app in `macos/` and its Linux
+counterpart in `linux/` (see its README). Everything below is the macOS app's,
+with paths relative to `macos/`, unless it names `linux/` or the repository
+root.
+
+`macos/` is a menu bar app that serves Lemmary's local AI from an Apple Silicon Mac,
 all on one port so Lemmary needs one provider of its OpenAI type: bge-m3
 embeddings through a bundled `llama-server`, OCR through Apple Vision as an
 OpenAI chat model (`apple-vision-ocr`) and behind a docling-serve-compatible
@@ -27,20 +32,21 @@ still work against it.
   `LlamaService` supervises one llama-server (there are two: embeddings and the
   text model), `OCRService` the worker pool, `ModelStore` downloads one model,
   `UI/` the popover and Settings.
-- `linux/`: the Linux counterpart for an NVIDIA GPU, a Go program with no
-  dependencies serving the same API on one port: llama-servers for bge-m3,
-  OCR with LightOnOCR-2 (pages rendered by `pdftoppm` and ImageMagick) and the
-  optional text model, offered by VRAM tier. Its Dockerfile pins the same
-  llama.cpp build for CUDA; its README has the measurements.
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
   drive it. `appcast.sh` and `sign-sparkle.sh` are the same files as in the
   other Sparkle apps (proxmacs, zonetab, Herdglass); keep them in step.
   `Scripts/appicon.swift` draws `Resources/LemmaryLocalAI.icns` (checked in;
   run it only to change the design).
-- `.github/workflows/build.yml` builds, signs, notarizes and publishes a
-  release for a `v*` tag; README's Releases section has the details and the
-  secrets it needs.
+- `.github/workflows/build.yml`, at the repository root, builds, signs,
+  notarizes and publishes a release for a `v*` tag; README's Releases section
+  has the details and the secrets it needs.
+- `linux/`, at the repository root: the Linux counterpart for an NVIDIA GPU, a
+  Go program with no dependencies serving the same API on one port:
+  llama-servers for bge-m3, OCR with LightOnOCR-2 (pages rendered by
+  `pdftoppm` and ImageMagick) and the optional text model, offered by VRAM
+  tier. Its Dockerfile pins the same llama.cpp build for CUDA; its README has
+  the measurements. Verify with `go test ./...` in `linux/`.
 
 ## Architecture
 
@@ -172,6 +178,7 @@ Lemmary ──:5001──> HTTPServer (in the app) ── APIRouter
 ## Verify
 
 ```bash
+cd macos
 swift test                              # LocalAIKit with real processes and sockets; VisionOCR with Vision
 Scripts/dev.sh --run -Port 18080 -ModelPath ~/ai/models/bge-m3-f16.gguf -TextModelEnabled YES
 curl -s localhost:18080/ready           # 503 while OCR workers warm up, then 200

@@ -14,7 +14,7 @@ import (
 )
 
 // llamaBuild is the llama.cpp release the Dockerfile installs, the same build
-// the Mac app bundles (Scripts/fetch-llama.sh): bge-m3 vectors from a
+// the Mac app bundles (macos/Scripts/fetch-llama.sh): bge-m3 vectors from a
 // different build could mean re-embedding Lemmary's archive.
 const llamaBuild = "b11936"
 

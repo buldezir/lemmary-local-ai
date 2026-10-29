@@ -1,6 +1,6 @@
 # lemmary-local-ai beside llama.cpp's own release build for CUDA, pinned by
-# SHA-256 as Scripts/fetch-llama.sh pins the Mac's. CUDA 12.8 rather than 13:
-# it runs on drivers from 570 on.
+# SHA-256 as macos/Scripts/fetch-llama.sh pins the Mac's. CUDA 12.8 rather
+# than 13: it runs on drivers from 570 on.
 #   docker build -t lemmary-local-ai linux/
 #   docker run --gpus all -p 5001:5001 -v lemmary-local-ai:/data lemmary-local-ai [-text-model gemma-4-e4b]
 FROM golang:1.27 AS build

@@ -31,6 +31,9 @@ jobs:
     # xcode-27 runs on Apple silicon, which the app and llama-server are for.
     runs-on: xcode-27
     timeout-minutes: 90
+    defaults:
+      run:
+        working-directory: macos
     env:
       APP: .build/release-app/LemmaryLocalAI.app
       ASSET: LemmaryLocalAI-macOS-arm64.zip
@@ -55,7 +58,7 @@ jobs:
         run: |
           if [ -z "$CERTIFICATE_BASE64" ]; then
             if [[ $GITHUB_REF == refs/tags/v* ]]; then
-              echo "::error::MACOS_CERTIFICATE_P12_BASE64 isn't set; see Releases in README.md"; exit 1
+              echo "::error::MACOS_CERTIFICATE_P12_BASE64 isn't set; see Releases in macos/README.md"; exit 1
             fi
             exit 0
           fi
@@ -145,7 +148,7 @@ jobs:
           # Downloads; the release is usually written by the time the app is
           # built. Without the key, a run by hand makes no feed.
           if [ -z "$SPARKLE_PRIVATE_KEY" ]; then
-            if [[ $GITHUB_REF == refs/tags/v* ]]; then echo "::error::SPARKLE_PRIVATE_KEY isn't set; see Releases in README.md"; exit 1; fi
+            if [[ $GITHUB_REF == refs/tags/v* ]]; then echo "::error::SPARKLE_PRIVATE_KEY isn't set; see Releases in macos/README.md"; exit 1; fi
           else
             gh release view "$GITHUB_REF_NAME" --json body --jq .body 2>/dev/null | sed '/^## Downloads/,$d' > "$RUNNER_TEMP/notes.md" || true
             download="https://github.com/$GITHUB_REPOSITORY/releases/download/$GITHUB_REF_NAME"
@@ -168,7 +171,7 @@ jobs:
       - uses: actions/upload-artifact@v7
         with:
           name: LemmaryLocalAI-${{ github.sha }}
-          path: dist/
+          path: macos/dist/
           if-no-files-found: error
 
       # One test at a time: some tests wait on child processes and sockets,
