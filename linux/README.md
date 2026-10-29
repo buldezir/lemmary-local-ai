@@ -97,7 +97,7 @@ Thinking is off and streamed answers pass through as they are generated.
 It needs a distribution with glibc 2.38 or newer, such as Ubuntu 24.04 or
 Debian 13: llama.cpp's release build does not start on Ubuntu 22.04 or
 Debian 12, so use the image there. Also the NVIDIA driver, 570 or newer, with
-`nvidia-smi`, and Go 1.27 or newer to build.
+`nvidia-smi`.
 
 ```bash
 sudo apt install ca-certificates libgomp1 libssl3 poppler-utils imagemagick
@@ -113,11 +113,18 @@ sha256sum -c <<'EOF'
 EOF
 for f in *.tar.gz; do tar xzf "$f" --strip-components=1 && rm "$f"; done
 
-# This program, beside llama-server, which is where it looks for it
-git clone https://github.com/buldezir/lemmary-local-ai /tmp/lemmary-local-ai
-CGO_ENABLED=0 go build -C /tmp/lemmary-local-ai/linux -o ~/lemmary-local-ai/lemmary-local-ai .
+# This program, from the latest release, beside llama-server, which is where
+# it looks for it
+curl -fL https://github.com/buldezir/lemmary-local-ai/releases/latest/download/LemmaryLocalAI-linux-x64.tar.gz | tar xz
 
 ~/lemmary-local-ai/lemmary-local-ai -text-model gemma-4-e4b
+```
+
+Or build it instead of downloading it, with Go 1.27 or newer:
+
+```bash
+git clone https://github.com/buldezir/lemmary-local-ai /tmp/lemmary-local-ai
+CGO_ENABLED=0 go build -C /tmp/lemmary-local-ai/linux -o ~/lemmary-local-ai/lemmary-local-ai .
 ```
 
 Models and llama-server logs go to `~/.local/share/lemmary-local-ai`
@@ -154,3 +161,7 @@ journalctl -u lemmary-local-ai -f
 docker build -t lemmary-local-ai linux/
 cd linux && go test ./...    # the OCR tests need pdftoppm and ImageMagick
 ```
+
+A `v*` tag runs the same tests in `.github/workflows/build.yml` (job `linux`),
+puts `LemmaryLocalAI-linux-x64.tar.gz` in its release beside the Mac app, and
+pushes the image as `:<version>` and, unless it is a prerelease, `:latest`.

@@ -40,7 +40,8 @@ still work against it.
   run it only to change the design).
 - `.github/workflows/build.yml`, at the repository root, builds, signs,
   notarizes and publishes a release for a `v*` tag; README's Releases section
-  has the details and the secrets it needs.
+  has the details and the secrets it needs. Its `linux` job adds the Linux
+  binary to the release and pushes the Linux image to GHCR.
 - `linux/`, at the repository root: the Linux counterpart for an NVIDIA GPU, a
   Go program with no dependencies serving the same API on one port:
   llama-servers for bge-m3, OCR with LightOnOCR-2 (pages rendered by
