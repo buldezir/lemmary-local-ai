@@ -27,6 +27,11 @@ still work against it.
   `LlamaService` supervises one llama-server (there are two: embeddings and the
   text model), `OCRService` the worker pool, `ModelStore` downloads one model,
   `UI/` the popover and Settings.
+- `linux/`: the Linux counterpart for an NVIDIA GPU, a Go program with no
+  dependencies serving the same API on one port: llama-servers for bge-m3,
+  OCR with LightOnOCR-2 (pages rendered by `pdftoppm` and ImageMagick) and the
+  optional text model, offered by VRAM tier. Its Dockerfile pins the same
+  llama.cpp build for CUDA; its README has the measurements.
 - `Scripts/fetch-llama.sh` pins the upstream llama.cpp build by tag and
   SHA-256; `bundle.sh` assembles and signs the `.app`; `dev.sh` / `release.sh`
   drive it. `appcast.sh` and `sign-sparkle.sh` are the same files as in the
