@@ -279,7 +279,7 @@ jobs:
 
             Unzip it and drag `LemmaryLocalAI.app` into Applications before you open it: macOS runs an app opened where it was downloaded from a temporary copy, which can't update itself. If it says it can't be updated, quit it and run `xattr -dr com.apple.quarantine /Applications/LemmaryLocalAI.app`.
 
-            **Lemmary Local AI for Linux** needs an NVIDIA GPU: the image `ghcr.io/buldezir/lemmary-local-ai:{version}`, or the program alone in `LemmaryLocalAI-linux-x64.tar.gz` beside llama.cpp's build. See [linux/README.md](https://github.com/buldezir/lemmary-local-ai/blob/main/linux/README.md).
+            **Lemmary Local AI for Linux** runs on an NVIDIA GPU, or without one serves the embeddings and Indra OCR on the CPU: the image `ghcr.io/buldezir/lemmary-local-ai:{version}`, or the program alone in `LemmaryLocalAI-linux-x64.tar.gz` beside llama.cpp's build. See [linux/README.md](https://github.com/buldezir/lemmary-local-ai/blob/main/linux/README.md).
         run: |
           NOTES=${NOTES//\{version\}/${TAG#v}}
           sums=$(sha256sum *) && echo "$sums" > SHA256SUMS
